@@ -168,28 +168,52 @@ ${JSON.stringify(formattedMessages, null, 2)}
 
     // Step 4: Poll for completion
     let runStatus = run.status;
+    let lastError: { code?: string; message?: string } | null = null;
     let attempts = 0;
     const maxAttempts = 60; // 60 seconds max
 
-    while (runStatus !== "completed" && runStatus !== "failed" && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+    const isTerminal = (s: string) => ["completed", "failed", "cancelled", "expired"].includes(s);
+
+    while (!isTerminal(runStatus) && attempts < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
       const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
         headers: {
-          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
           "OpenAI-Beta": "assistants=v2",
         },
       });
 
-      const statusData = await statusResponse.json();
-      runStatus = statusData.status;
+      const statusText = await statusResponse.text();
+      let statusData: any = {};
+      try {
+        statusData = statusText ? JSON.parse(statusText) : {};
+      } catch {
+        // ignore
+      }
+
+      runStatus = statusData.status ?? runStatus;
+      lastError = statusData.last_error ?? lastError;
       attempts++;
-      
+
       console.log(`Run status: ${runStatus} (attempt ${attempts})`);
+
+      if (runStatus === "requires_action") {
+        console.error("Assistant run requires_action; tool calls are not supported in this function.");
+        break;
+      }
     }
 
     if (runStatus !== "completed") {
-      throw new Error(`Run did not complete. Final status: ${runStatus}`);
+      const errMsg =
+        runStatus === "requires_action"
+          ? "Assistant run requires tool actions (requires_action)"
+          : lastError?.message
+          ? `Run failed: ${lastError.message}`
+          : `Run did not complete. Final status: ${runStatus}`;
+
+      console.error("Run failed details:", { runStatus, lastError });
+      throw new Error(errMsg);
     }
 
     // Step 5: Get messages
