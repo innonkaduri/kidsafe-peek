@@ -1,21 +1,35 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Shield, 
   MessageSquare, 
   AlertTriangle, 
   CheckCircle,
   Clock,
-  TrendingUp
+  TrendingUp,
+  User,
+  Users
 } from 'lucide-react';
-import { Child, Scan, Finding, Chat, RiskLevel } from '@/types/database';
+import { Child, Scan, Finding, RiskLevel } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { formatDistanceToNow } from 'date-fns';
 import { he } from 'date-fns/locale';
 
 interface OverviewTabProps {
   child: Child;
+}
+
+interface RecentMessage {
+  id: string;
+  text_content: string | null;
+  text_excerpt: string | null;
+  sender_label: string;
+  is_child_sender: boolean;
+  message_timestamp: string;
+  msg_type: string;
+  chat_name?: string;
 }
 
 const riskLabels: Record<RiskLevel, string> = {
@@ -28,6 +42,7 @@ const riskLabels: Record<RiskLevel, string> = {
 export function OverviewTab({ child }: OverviewTabProps) {
   const [lastScan, setLastScan] = useState<Scan | null>(null);
   const [recentFindings, setRecentFindings] = useState<Finding[]>([]);
+  const [recentMessages, setRecentMessages] = useState<RecentMessage[]>([]);
   const [chatsCount, setChatsCount] = useState(0);
   const [messagesCount, setMessagesCount] = useState(0);
   const [lastMessageAt, setLastMessageAt] = useState<string | null>(null);
@@ -78,6 +93,23 @@ export function OverviewTab({ child }: OverviewTabProps) {
         .limit(1)
         .maybeSingle();
 
+      // Fetch recent messages (last 20)
+      const { data: recentMsgs } = await supabase
+        .from('messages')
+        .select(`
+          id,
+          text_content,
+          text_excerpt,
+          sender_label,
+          is_child_sender,
+          message_timestamp,
+          msg_type,
+          chats!inner(chat_name)
+        `)
+        .eq('child_id', child.id)
+        .order('message_timestamp', { ascending: false })
+        .limit(20);
+
       if (!mounted) return;
 
       setLastScan(scanData);
@@ -85,6 +117,12 @@ export function OverviewTab({ child }: OverviewTabProps) {
       setChatsCount(chats || 0);
       setMessagesCount(messages || 0);
       setLastMessageAt(lastMsg?.message_timestamp ?? null);
+      setRecentMessages(
+        (recentMsgs || []).map((m: any) => ({
+          ...m,
+          chat_name: m.chats?.chat_name,
+        }))
+      );
       setLoading(false);
     }
 
@@ -199,6 +237,76 @@ export function OverviewTab({ child }: OverviewTabProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Recent Messages Feed */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="w-5 h-5 text-cyan-400" />
+            הודעות אחרונות
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {recentMessages.length > 0 ? (
+            <ScrollArea className="h-[300px]">
+              <div className="space-y-3 pr-4">
+                {recentMessages.map((msg) => (
+                  <div 
+                    key={msg.id} 
+                    className={`glass-card p-3 flex items-start gap-3 ${
+                      msg.is_child_sender ? 'border-r-2 border-r-primary' : 'border-r-2 border-r-muted'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                      msg.is_child_sender ? 'bg-primary/20' : 'bg-muted'
+                    }`}>
+                      {msg.is_child_sender ? (
+                        <User className="w-4 h-4 text-primary" />
+                      ) : (
+                        <Users className="w-4 h-4 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-foreground/80">
+                          {msg.sender_label}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {msg.chat_name}
+                        </span>
+                      </div>
+                      <p className="text-sm text-foreground/90 line-clamp-2">
+                        {msg.msg_type === 'text' 
+                          ? (msg.text_content || msg.text_excerpt || '[הודעה ריקה]')
+                          : `[${msg.msg_type}]`}
+                      </p>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(msg.message_timestamp).toLocaleString('he-IL', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                          day: '2-digit',
+                          month: '2-digit',
+                        })}
+                        {' • '}
+                        {formatDistanceToNow(new Date(msg.message_timestamp), { 
+                          addSuffix: true, 
+                          locale: he 
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="text-center py-8">
+              <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-muted-foreground">טרם נקלטו הודעות</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Recent Findings */}
       <Card>
