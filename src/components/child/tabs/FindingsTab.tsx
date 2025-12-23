@@ -80,7 +80,7 @@ export function FindingsTab({ child }: FindingsTabProps) {
     setContextDialogOpen(true);
   };
 
-  const getRiskBorderColor = (level: RiskLevel) => {
+  const getRiskBorderColor = (level: string) => {
     switch (level) {
       case 'critical': return 'border-r-risk-critical';
       case 'high': return 'border-r-risk-high';
