@@ -102,28 +102,25 @@ export default function Home() {
 
   const statCards = [
     {
-      label: "ילדים מנוטרים",
-      value: stats.childrenCount,
-      icon: Users,
-      color: "bg-primary/20 text-primary",
-    },
-    {
       label: "חיבורים פעילים",
       value: stats.activeConnectors,
       icon: Activity,
-      color: "bg-success/20 text-success",
+      bgColor: "bg-emerald-100",
+      iconColor: "text-emerald-600",
     },
     {
       label: "התראות פתוחות",
       value: stats.openAlerts,
       icon: Bell,
-      color: "bg-warning/20 text-warning",
+      bgColor: "bg-amber-100",
+      iconColor: "text-amber-600",
     },
     {
       label: "סיכון גבוה",
       value: stats.highRiskCount,
       icon: AlertTriangle,
-      color: "bg-destructive/20 text-destructive",
+      bgColor: "bg-red-100",
+      iconColor: "text-red-500",
     },
   ];
 
@@ -131,19 +128,20 @@ export default function Home() {
     <MainLayout>
       <div className="space-y-6">
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {statCards.map((stat, index) => (
-            <Card key={index} className="glass-card p-4">
-              <div className="flex items-center justify-between">
-                <div className={`p-3 rounded-xl ${stat.color}`}>
-                  <stat.icon className="h-6 w-6" />
-                </div>
-                <div className="text-right">
-                  <p className="text-3xl font-bold">{stat.value}</p>
-                  <p className="text-sm text-muted-foreground">{stat.label}</p>
-                </div>
+            <div 
+              key={index} 
+              className="stat-card flex items-center justify-between"
+            >
+              <div className={`p-3 rounded-xl ${stat.bgColor}`}>
+                <stat.icon className={`h-6 w-6 ${stat.iconColor}`} />
               </div>
-            </Card>
+              <div className="text-right">
+                <p className="text-3xl font-bold text-gray-800">{stat.value}</p>
+                <p className="text-sm text-gray-500">{stat.label}</p>
+              </div>
+            </div>
           ))}
         </div>
 
