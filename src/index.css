@@ -6,73 +6,73 @@
 
 @layer base {
   :root {
-    /* Deep matte black background */
-    --background: 220 10% 4%;
-    --foreground: 0 0% 92%;
+    /* Deep navy blue background - like the reference image */
+    --background: 215 50% 8%;
+    --foreground: 0 0% 98%;
 
-    /* Glassmorphism cards - liquid glass effect */
-    --card: 0 0% 100% / 0.04;
-    --card-foreground: 0 0% 92%;
-    --card-border: 0 0% 100% / 0.06;
-    --card-glow: 210 100% 60% / 0.08;
+    /* Glassmorphism cards - cyan glow effect */
+    --card: 210 50% 15% / 0.6;
+    --card-foreground: 0 0% 98%;
+    --card-border: 190 100% 50% / 0.3;
+    --card-glow: 190 100% 50% / 0.15;
 
-    --popover: 220 10% 6%;
-    --popover-foreground: 0 0% 92%;
+    --popover: 215 50% 10%;
+    --popover-foreground: 0 0% 98%;
 
-    /* Primary - soft white accent */
-    --primary: 0 0% 92%;
-    --primary-foreground: 220 10% 6%;
-    --primary-glow: 0 0% 100%;
+    /* Primary - cyan accent */
+    --primary: 190 100% 50%;
+    --primary-foreground: 215 50% 8%;
+    --primary-glow: 190 100% 60%;
 
     /* Secondary - muted glass */
-    --secondary: 0 0% 100% / 0.05;
-    --secondary-foreground: 0 0% 75%;
+    --secondary: 210 50% 20% / 0.5;
+    --secondary-foreground: 0 0% 85%;
 
-    --muted: 220 8% 12%;
-    --muted-foreground: 0 0% 50%;
+    --muted: 215 40% 15%;
+    --muted-foreground: 210 20% 60%;
 
-    /* Accent - subtle cool gray */
-    --accent: 210 15% 25% / 0.4;
-    --accent-foreground: 0 0% 88%;
+    /* Accent - cyan glow */
+    --accent: 190 100% 50% / 0.2;
+    --accent-foreground: 0 0% 98%;
 
-    --destructive: 0 45% 40%;
+    --destructive: 0 60% 50%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 0 0% 100% / 0.05;
-    --input: 0 0% 100% / 0.04;
-    --ring: 210 40% 50%;
+    --border: 190 100% 50% / 0.2;
+    --input: 210 50% 20% / 0.5;
+    --ring: 190 100% 50%;
 
-    --radius: 0.875rem;
+    --radius: 1rem;
 
-    /* Risk level colors - refined and muted */
-    --risk-low: 210 60% 50%;
-    --risk-medium: 45 50% 45%;
-    --risk-high: 25 70% 45%;
-    --risk-critical: 0 50% 40%;
+    /* Risk level colors - vivid */
+    --risk-low: 190 100% 50%;
+    --risk-medium: 45 100% 50%;
+    --risk-high: 25 100% 50%;
+    --risk-critical: 0 80% 50%;
 
     /* Status colors */
-    --success: 160 50% 40%;
-    --warning: 45 50% 45%;
-    --info: 210 50% 50%;
+    --success: 160 80% 45%;
+    --warning: 45 100% 50%;
+    --info: 190 100% 50%;
 
     /* Gradients */
-    --gradient-glass: linear-gradient(135deg, hsl(0 0% 100% / 0.06), hsl(0 0% 100% / 0.01));
-    --gradient-dark: linear-gradient(180deg, hsl(220 10% 5%), hsl(220 10% 3%));
+    --gradient-glass: linear-gradient(135deg, hsl(210 50% 20% / 0.6), hsl(210 50% 15% / 0.3));
+    --gradient-dark: linear-gradient(180deg, hsl(215 50% 10%), hsl(215 50% 6%));
 
-    /* Subtle shadows */
-    --shadow-glass: 0 4px 24px hsl(0 0% 0% / 0.25);
-    --shadow-hover: 0 8px 40px hsl(0 0% 0% / 0.35);
-    --shadow-card: 0 2px 16px hsl(0 0% 0% / 0.2);
+    /* Cyan glow shadows */
+    --shadow-glass: 0 4px 24px hsl(190 100% 50% / 0.1);
+    --shadow-hover: 0 8px 40px hsl(190 100% 50% / 0.2);
+    --shadow-card: 0 2px 16px hsl(0 0% 0% / 0.3);
 
-    /* Sidebar - dark glass */
-    --sidebar-background: 220 10% 5%;
-    --sidebar-foreground: 0 0% 75%;
-    --sidebar-primary: 0 0% 92%;
-    --sidebar-primary-foreground: 220 10% 6%;
-    --sidebar-accent: 0 0% 100% / 0.04;
-    --sidebar-accent-foreground: 0 0% 88%;
-    --sidebar-border: 0 0% 100% / 0.05;
-    --sidebar-ring: 210 40% 50%;
+    /* Sidebar - dark navy */
+    --sidebar-background: 215 50% 6%;
+    --sidebar-foreground: 210 20% 70%;
+    --sidebar-primary: 190 100% 50%;
+    --sidebar-primary-foreground: 215 50% 8%;
+    --sidebar-accent: 210 50% 15% / 0.5;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 190 100% 50% / 0.15;
+    --sidebar-ring: 190 100% 50%;
   }
 }
 
@@ -104,21 +104,27 @@
 }
 
 @layer components {
-  /* Liquid Glass card */
+  /* Cyan Glass card - like reference image */
   .glass-card {
     @apply relative overflow-hidden;
     border-radius: 16px;
-    background: linear-gradient(135deg, hsl(0 0% 100% / 0.05), hsl(0 0% 100% / 0.015));
+    background: linear-gradient(135deg, hsl(210 50% 15% / 0.7), hsl(210 50% 12% / 0.5));
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
-    border: 1px solid hsl(0 0% 100% / 0.06);
-    box-shadow: 0 4px 24px hsl(0 0% 0% / 0.2);
+    border: 1px solid hsl(190 100% 50% / 0.3);
+    box-shadow: 
+      0 4px 24px hsl(0 0% 0% / 0.3),
+      0 0 20px hsl(190 100% 50% / 0.1),
+      inset 0 1px 0 hsl(190 100% 70% / 0.1);
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .glass-card:hover {
-    box-shadow: 0 8px 40px hsl(0 0% 0% / 0.3);
-    border-color: hsl(0 0% 100% / 0.1);
+    box-shadow: 
+      0 8px 40px hsl(0 0% 0% / 0.4),
+      0 0 30px hsl(190 100% 50% / 0.15),
+      inset 0 1px 0 hsl(190 100% 70% / 0.15);
+    border-color: hsl(190 100% 50% / 0.4);
     transform: translateY(-2px);
   }
 
@@ -126,7 +132,7 @@
     content: '';
     @apply absolute inset-0 pointer-events-none;
     border-radius: 16px;
-    background: linear-gradient(135deg, hsl(0 0% 100% / 0.08) 0%, transparent 60%);
+    background: linear-gradient(135deg, hsl(190 100% 50% / 0.08) 0%, transparent 60%);
     opacity: 0;
     transition: opacity 0.4s ease;
   }

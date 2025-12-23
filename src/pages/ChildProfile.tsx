@@ -63,13 +63,13 @@ export default function ChildProfile() {
       <div className="space-y-6 animate-slide-up">
         {/* Breadcrumb & Header */}
         <div className="flex items-center gap-4 mb-6">
-          <Button asChild variant="ghost" size="icon">
+          <Button asChild variant="ghost" size="icon" className="text-foreground hover:bg-accent">
             <Link to="/">
               <ArrowRight className="w-5 h-5" />
             </Link>
           </Button>
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-cyan-500/20 flex items-center justify-center border border-primary/20">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-400/20 to-blue-600/20 flex items-center justify-center border border-primary/30">
               {child.avatar_url ? (
                 <img 
                   src={child.avatar_url} 
@@ -81,7 +81,7 @@ export default function ChildProfile() {
               )}
             </div>
             <div>
-              <h1 className="font-heebo text-2xl font-bold">{child.display_name}</h1>
+              <h1 className="font-heebo text-2xl font-bold text-foreground">{child.display_name}</h1>
               <div className="flex items-center gap-3">
                 {child.age_range && (
                   <span className="text-sm text-muted-foreground">
