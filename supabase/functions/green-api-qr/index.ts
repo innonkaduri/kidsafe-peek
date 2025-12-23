@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,7 +8,7 @@ const corsHeaders = {
 
 interface QRResponse {
   type: "qrCode" | "alreadyLogged" | "error";
-  message?: string; // QR base64 or error message
+  message?: string;
 }
 
 interface StateResponse {
@@ -15,113 +16,85 @@ interface StateResponse {
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Verify authentication
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ type: "error", message: "Missing Authorization header" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const token = authHeader.replace("Bearer ", "");
+    const supabaseAuth = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!
+    );
+
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+    if (authError || !user) {
+      return new Response(
+        JSON.stringify({ type: "error", message: "Unauthorized" }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Get credentials
     const instanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
     const apiToken = Deno.env.get("GREEN_API_TOKEN");
 
     if (!instanceId || !apiToken) {
-      console.error("Missing GREEN_API credentials in secrets");
       return new Response(
-        JSON.stringify({ 
-          type: "error", 
-          message: "Missing Green API credentials" 
-        }),
+        JSON.stringify({ type: "error", message: "Missing Green API credentials" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
 
-    // Parse request body for action
     let action = "qr";
     try {
-      const body = await req.json();
+      const body = await req.clone().json();
       action = body.action || "qr";
-    } catch {
-      // Default to QR action
-    }
+    } catch { /* default to qr */ }
 
     if (action === "status") {
-      // Check connection status
-      console.log("Checking Green API connection status");
       const stateResponse = await fetch(`${baseUrl}/getStateInstance/${apiToken}`);
-      
       if (stateResponse.status === 429) {
-        // Rate limited - return unknown status, don't throw
-        console.log("Rate limited, returning unknown status");
         return new Response(
           JSON.stringify({ status: "unknown", authorized: false, rateLimited: true }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      
-      if (!stateResponse.ok) {
-        throw new Error(`Status check failed: ${stateResponse.status}`);
-      }
-
+      if (!stateResponse.ok) throw new Error(`Status check failed: ${stateResponse.status}`);
       const stateData: StateResponse = await stateResponse.json();
-      console.log("State:", stateData.stateInstance);
-
       return new Response(
-        JSON.stringify({ 
-          status: stateData.stateInstance,
-          authorized: stateData.stateInstance === "authorized"
-        }),
+        JSON.stringify({ status: stateData.stateInstance, authorized: stateData.stateInstance === "authorized" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Default: Get QR code
-    console.log("Fetching QR code from Green API");
     const qrResponse = await fetch(`${baseUrl}/qr/${apiToken}`);
-    
     if (qrResponse.status === 429) {
-      console.log("Rate limited on QR fetch");
       return new Response(
-        JSON.stringify({ type: "error", message: "Rate limited, please wait", rateLimited: true }),
+        JSON.stringify({ type: "error", message: "Rate limited", rateLimited: true }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-    
-    if (qrResponse.status === 504 || qrResponse.status === 502 || qrResponse.status === 503) {
-      console.log("Green API timeout/unavailable:", qrResponse.status);
-      return new Response(
-        JSON.stringify({ type: "error", message: "Green API זמנית לא זמין, נסה שוב", timeout: true }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
-    if (!qrResponse.ok) {
-      throw new Error(`QR fetch failed: ${qrResponse.status}`);
-    }
+    if (!qrResponse.ok) throw new Error(`QR fetch failed: ${qrResponse.status}`);
 
     const qrData = await qrResponse.json();
-    console.log("QR response type:", qrData.type);
+    const response: QRResponse = { type: qrData.type || "error", message: qrData.message };
 
-    // Green API returns: { type: "qrCode", message: "base64..." } 
-    // or { type: "alreadyLogged" } or { type: "error", message: "..." }
-    
-    const response: QRResponse = {
-      type: qrData.type || "error",
-      message: qrData.message || undefined,
-    };
-
-    return new Response(
-      JSON.stringify(response),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify(response), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (error) {
-    console.error("Error in green-api-qr:", error);
     return new Response(
-      JSON.stringify({ 
-        type: "error", 
-        message: error instanceof Error ? error.message : "Unknown error" 
-      }),
+      JSON.stringify({ type: "error", message: error instanceof Error ? error.message : "Unknown error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

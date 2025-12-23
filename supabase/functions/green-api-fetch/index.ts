@@ -28,6 +28,67 @@ interface GreenAPIMessage {
   caption?: string;
 }
 
+// Helper function to verify user authentication and child ownership
+async function verifyAuthAndOwnership(
+  req: Request,
+  childId: string
+): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(
+      JSON.stringify({ error: "Missing Authorization header" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  
+  const supabaseAuth = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!
+  );
+
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+  
+  if (authError || !user) {
+    console.error("Auth error:", authError);
+    return new Response(
+      JSON.stringify({ error: "Unauthorized" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Verify user owns the child
+  const { data: child, error: childError } = await supabaseAuth
+    .from("children")
+    .select("id")
+    .eq("id", childId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (childError || !child) {
+    console.error("Child ownership verification failed:", childError);
+    return new Response(
+      JSON.stringify({ error: "Forbidden - You do not own this child resource" }),
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  return { userId: user.id };
+}
+
+// Helper function to get Green API credentials
+function getGreenApiCredentials(): { instanceId: string; apiToken: string } | null {
+  const instanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
+  const apiToken = Deno.env.get("GREEN_API_TOKEN");
+
+  if (instanceId && apiToken) {
+    return { instanceId, apiToken };
+  }
+
+  return null;
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -35,24 +96,34 @@ serve(async (req) => {
   }
 
   try {
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const instanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
-    const apiToken = Deno.env.get("GREEN_API_TOKEN");
+    const { child_id }: FetchRequest = await req.json();
 
-    if (!instanceId || !apiToken) {
-      console.error("Missing GREEN_API credentials in secrets");
+    // Verify authentication and child ownership
+    const authResult = await verifyAuthAndOwnership(req, child_id);
+    if (authResult instanceof Response) {
+      return authResult;
+    }
+
+    const { userId } = authResult;
+
+    // Get Green API credentials
+    const credentials = getGreenApiCredentials();
+    
+    if (!credentials) {
+      console.error("Missing GREEN_API credentials");
       return new Response(
         JSON.stringify({ error: "Missing Green API credentials" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { instanceId, apiToken } = credentials;
 
-    const { child_id }: FetchRequest = await req.json();
-
-    console.log(`Fetching messages for child ${child_id} from Green API instance ${instanceId}`);
+    // Create service role client for database operations
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
 
     const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
 
@@ -68,7 +139,6 @@ serve(async (req) => {
     }
 
     const chats: GreenAPIChat[] = await chatsResponse.json();
-    console.log(`Found ${chats.length} chats`);
 
     let totalMessagesImported = 0;
     let totalChatsProcessed = 0;
@@ -143,7 +213,7 @@ serve(async (req) => {
             child_id,
             chat_id: dbChat.id,
             sender_label: msg.senderName || msg.senderId,
-            is_child_sender: false, // Will need to determine based on phone number
+            is_child_sender: false,
             msg_type: msgType,
             message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
             text_content: textContent,
@@ -158,8 +228,6 @@ serve(async (req) => {
         console.error(`Error processing chat ${chat.id}:`, chatError);
       }
     }
-
-    console.log(`Import complete: ${totalChatsProcessed} chats, ${totalMessagesImported} messages`);
 
     return new Response(
       JSON.stringify({

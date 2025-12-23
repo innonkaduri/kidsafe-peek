@@ -1,5 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,7 @@ const corsHeaders = {
 interface AnalyzeMediaRequest {
   media_url: string;
   media_type: "image" | "video" | "audio";
+  child_id?: string;
   child_context?: string;
 }
 
@@ -18,6 +20,57 @@ interface MediaAnalysisResult {
   risk_indicators: string[];
   risk_level: "none" | "low" | "medium" | "high";
   confidence: number;
+}
+
+// Helper function to verify user authentication and optionally child ownership
+async function verifyAuth(
+  req: Request,
+  childId?: string
+): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(
+      JSON.stringify({ error: "Missing Authorization header" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  
+  const supabaseAuth = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!
+  );
+
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+  
+  if (authError || !user) {
+    console.error("Auth error:", authError);
+    return new Response(
+      JSON.stringify({ error: "Unauthorized" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // If child_id provided, verify user owns the child
+  if (childId) {
+    const { data: child, error: childError } = await supabaseAuth
+      .from("children")
+      .select("id")
+      .eq("id", childId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (childError || !child) {
+      console.error("Child ownership verification failed:", childError);
+      return new Response(
+        JSON.stringify({ error: "Forbidden - You do not own this child resource" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+  }
+
+  return { userId: user.id };
 }
 
 serve(async (req) => {
@@ -31,17 +84,20 @@ serve(async (req) => {
       throw new Error("OPENAI_API_KEY is not configured");
     }
 
-    const { media_url, media_type, child_context }: AnalyzeMediaRequest = await req.json();
+    const { media_url, media_type, child_id, child_context }: AnalyzeMediaRequest = await req.json();
+
+    // Verify authentication
+    const authResult = await verifyAuth(req, child_id);
+    if (authResult instanceof Response) {
+      return authResult;
+    }
 
     if (!media_url) {
       throw new Error("media_url is required");
     }
 
-    console.log(`Analyzing ${media_type} from URL: ${media_url.substring(0, 50)}...`);
-
     // Only analyze images for now (GPT-4o Vision supports images)
     if (media_type !== "image") {
-      console.log(`Skipping analysis for ${media_type} - only images are supported`);
       return new Response(
         JSON.stringify({
           description: `[${media_type === "audio" ? "הודעה קולית" : "וידאו"}]`,
@@ -98,7 +154,7 @@ serve(async (req) => {
                 type: "image_url",
                 image_url: {
                   url: media_url,
-                  detail: "low", // Use low detail for faster processing
+                  detail: "low",
                 },
               },
             ],
@@ -132,8 +188,6 @@ serve(async (req) => {
       throw new Error("No content in OpenAI response");
     }
 
-    console.log("OpenAI response:", content);
-
     // Parse JSON response
     let analysisResult: MediaAnalysisResult;
     try {
@@ -152,11 +206,6 @@ serve(async (req) => {
         confidence: 0.5,
       };
     }
-
-    console.log("Media analysis complete:", {
-      risk_level: analysisResult.risk_level,
-      indicators_count: analysisResult.risk_indicators?.length || 0,
-    });
 
     return new Response(JSON.stringify(analysisResult), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

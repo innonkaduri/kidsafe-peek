@@ -55,12 +55,10 @@ serve(async (req) => {
   try {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const expectedInstanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     const webhookData: GreenAPIMessage = await req.json();
-    console.log("Received Green API webhook:", webhookData.typeWebhook);
 
     // Only process incoming messages
     if (webhookData.typeWebhook !== "incomingMessageReceived") {
@@ -71,16 +69,8 @@ serve(async (req) => {
 
     const instanceId = webhookData.instanceData.idInstance.toString();
 
-    // Verify this is our instance
-    if (expectedInstanceId && instanceId !== expectedInstanceId) {
-      console.log("Ignoring webhook from different instance:", instanceId);
-      return new Response(JSON.stringify({ status: "wrong_instance" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     // Find the data source and child associated with this instance
-    // First try by instance_id in connector_credentials
+    // First try to match by instance_id in connector_credentials (per-child credentials)
     let childId: string | null = null;
     
     const { data: credential } = await supabase
@@ -99,7 +89,19 @@ serve(async (req) => {
     if (credential) {
       childId = (credential.data_sources as any).child_id;
     } else {
-      // Fallback: find any child with connector data source (for global instance)
+      // Fallback: check if this matches our global instance
+      const expectedInstanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
+      
+      if (expectedInstanceId && instanceId !== expectedInstanceId) {
+        // This webhook is from an unknown instance - reject it
+        console.error("Webhook from unknown instance:", instanceId);
+        return new Response(JSON.stringify({ status: "unknown_instance" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      
+      // For global instance, find any child with connector data source
       const { data: anyDataSource } = await supabase
         .from("data_sources")
         .select("child_id")
@@ -162,8 +164,6 @@ serve(async (req) => {
     const typeMessage = msgData.typeMessage;
     const fileData = msgData.fileMessageData;
     
-    console.log(`Processing message - typeMessage: ${typeMessage}, has fileData: ${!!fileData}`);
-    
     // Use typeMessage to determine the message type (Green API structure)
     if (typeMessage === 'textMessage' && msgData.textMessageData) {
       msgType = "text";
@@ -199,10 +199,8 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Message type: ${msgType}, has media URL: ${!!mediaUrl}, has thumbnail: ${!!mediaThumbnailUrl}`);
-
     // Insert message with media URLs
-    const { data: insertedMessage, error: msgError } = await supabase.from("messages").insert({
+    const { error: msgError } = await supabase.from("messages").insert({
       child_id: childId,
       chat_id: chat.id,
       sender_label: webhookData.senderData.senderName || webhookData.senderData.sender,
@@ -213,7 +211,7 @@ serve(async (req) => {
       text_excerpt: textContent.substring(0, 100),
       media_url: mediaUrl,
       media_thumbnail_url: mediaThumbnailUrl,
-    }).select('id').single();
+    });
 
     if (msgError) {
       console.error("Error inserting message:", msgError);
@@ -225,8 +223,6 @@ serve(async (req) => {
       .from("chats")
       .update({ last_message_at: new Date(webhookData.timestamp * 1000).toISOString() })
       .eq("id", chat.id);
-
-    console.log("Message stored successfully for child:", childId);
 
     return new Response(JSON.stringify({ status: "ok" }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
