@@ -119,26 +119,11 @@
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  .glass-card:hover {
-    box-shadow: 
-      0 8px 40px hsl(0 0% 0% / 0.4),
-      0 0 30px hsl(190 100% 50% / 0.15),
-      inset 0 1px 0 hsl(190 100% 70% / 0.15);
-    border-color: hsl(190 100% 50% / 0.4);
-    transform: translateY(-2px);
-  }
-
   .glass-card::before {
     content: '';
     @apply absolute inset-0 pointer-events-none;
     border-radius: 16px;
     background: linear-gradient(135deg, hsl(190 100% 50% / 0.08) 0%, transparent 60%);
-    opacity: 0;
-    transition: opacity 0.4s ease;
-  }
-
-  .glass-card:hover::before {
-    opacity: 1;
   }
 
   /* Subtle button */
@@ -149,11 +134,6 @@
     backdrop-filter: blur(12px);
   }
 
-  .btn-subtle:hover {
-    background: hsl(0 0% 100% / 0.1);
-    border-color: hsl(0 0% 100% / 0.15);
-    transform: translateY(-1px);
-  }
 
   /* Risk badges - muted and refined */
   .badge-risk-low {
@@ -283,14 +263,9 @@
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  /* Hover depth effect */
+  /* Hover depth effect - disabled */
   .hover-depth {
     @apply transition-all duration-400;
-  }
-
-  .hover-depth:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 40px hsl(0 0% 0% / 0.3);
   }
 
   /* Focus ring - subtle */
