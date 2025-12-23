@@ -1,7 +1,7 @@
 project_id = "qhsvmfnjoowexmyaqgrr"
 
 [functions.analyze-threats]
-verify_jwt = true
+verify_jwt = false
 
 [functions.green-api-webhook]
 verify_jwt = false
