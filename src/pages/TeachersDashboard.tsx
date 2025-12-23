@@ -9,7 +9,18 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Shield, GraduationCap, Send, Clock, User, MessageSquare, Plus, CheckCircle2, AlertTriangle } from "lucide-react";
+import { 
+  Shield, 
+  GraduationCap, 
+  Send, 
+  Clock, 
+  User, 
+  MessageSquare, 
+  Plus, 
+  CheckCircle2, 
+  AlertTriangle,
+  Search
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDistanceToNow } from "date-fns";
 import { he } from "date-fns/locale";
@@ -19,6 +30,7 @@ interface TeacherAlert {
   id: string;
   child_id: string;
   child_name: string;
+  parent_name: string;
   teacher_email: string;
   teacher_name: string | null;
   status: string;
@@ -50,6 +62,11 @@ export default function TeachersDashboard() {
   const [loadingData, setLoadingData] = useState(true);
   const [showNewAlert, setShowNewAlert] = useState(false);
   const [sending, setSending] = useState(false);
+  
+  // Filters
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("pending");
+  const [typeFilter, setTypeFilter] = useState("all");
 
   // Form state
   const [selectedChild, setSelectedChild] = useState("");
@@ -87,6 +104,13 @@ export default function TeachersDashboard() {
 
       setChildren(childrenData || []);
 
+      // Fetch current user profile
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user?.id)
+        .maybeSingle();
+
       // Fetch teacher alerts
       const { data: alertsData } = await supabase
         .from("teacher_alerts")
@@ -105,13 +129,14 @@ export default function TeachersDashboard() {
                 .from("findings")
                 .select("explanation")
                 .eq("id", alert.finding_id)
-                .single();
+                .maybeSingle();
               findingExplanation = finding?.explanation;
             }
 
             return {
               ...alert,
               child_name: childMap.get(alert.child_id) || "ילד",
+              parent_name: profile?.full_name || "הורה",
               finding_explanation: findingExplanation,
             };
           })
@@ -176,18 +201,21 @@ export default function TeachersDashboard() {
     setParentMessage("");
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "pending":
-        return <Badge variant="outline" className="text-warning border-warning">ממתין</Badge>;
-      case "responded":
-        return <Badge className="bg-success text-success-foreground">נענה</Badge>;
-      case "closed":
-        return <Badge variant="secondary">סגור</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
+  // Filter alerts
+  const filteredAlerts = alerts.filter(alert => {
+    const matchesSearch = searchTerm === "" || 
+      alert.child_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      alert.parent_name.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesStatus = statusFilter === "all" || alert.status === statusFilter;
+    
+    return matchesSearch && matchesStatus;
+  });
+
+  // Stats
+  const totalAlerts = alerts.length;
+  const pendingAlerts = alerts.filter(a => a.status === "pending").length;
+  const resolvedAlerts = alerts.filter(a => a.status === "responded" || a.status === "closed").length;
 
   if (loading || loadingData) {
     return (
@@ -201,132 +229,225 @@ export default function TeachersDashboard() {
 
   return (
     <MainLayout>
-      <div className="space-y-6">
+      <div className="space-y-6" dir="rtl">
+        {/* Header */}
         <div className="flex items-center justify-between">
-          <Dialog open={showNewAlert} onOpenChange={setShowNewAlert}>
-            <DialogTrigger asChild>
-              <Button className="btn-glow">
-                <Plus className="h-4 w-4 ml-2" />
-                דווח למורה
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle className="text-right">דיווח למורה / גורם חינוכי</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-right block">בחר ילד</label>
-                  <Select value={selectedChild} onValueChange={setSelectedChild}>
-                    <SelectTrigger className="text-right">
-                      <SelectValue placeholder="בחר ילד" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {children.map((child) => (
-                        <SelectItem key={child.id} value={child.id}>
-                          {child.display_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+          <div className="text-right">
+            <h1 className="text-2xl font-bold text-foreground">דשבורד גורם חינוכי</h1>
+            <p className="text-muted-foreground">התראות שהורים שיתפו איתך</p>
+          </div>
+          <div className="bg-gradient-to-br from-primary/20 to-purple-500/20 w-16 h-16 rounded-2xl flex items-center justify-center">
+            <Shield className="h-8 w-8 text-primary" />
+          </div>
+        </div>
 
-                {findings.length > 0 && (
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Resolved */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-success/20 p-3 rounded-full">
+              <CheckCircle2 className="h-6 w-6 text-success" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{resolvedAlerts}</p>
+              <p className="text-sm text-muted-foreground">טופלו</p>
+            </div>
+          </Card>
+
+          {/* Pending */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-warning/20 p-3 rounded-full">
+              <Clock className="h-6 w-6 text-warning" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{pendingAlerts}</p>
+              <p className="text-sm text-muted-foreground">ממתינות לטיפול</p>
+            </div>
+          </Card>
+
+          {/* Total */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-primary/20 p-3 rounded-full">
+              <AlertTriangle className="h-6 w-6 text-primary" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{totalAlerts}</p>
+              <p className="text-sm text-muted-foreground">סך הכל התראות</p>
+            </div>
+          </Card>
+        </div>
+
+        {/* Filters */}
+        <Card className="glass-card p-4">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
+                  <SelectValue placeholder="כל הסוגים" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">כל הסוגים</SelectItem>
+                  <SelectItem value="bullying">בריונות</SelectItem>
+                  <SelectItem value="harassment">הטרדה</SelectItem>
+                  <SelectItem value="threat">איום</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[180px] bg-background/50 border-border/50">
+                  <div className="flex items-center gap-2">
+                    {statusFilter === "pending" && <span className="w-2 h-2 rounded-full bg-destructive" />}
+                    {statusFilter === "responded" && <span className="w-2 h-2 rounded-full bg-success" />}
+                    <SelectValue placeholder="ממתינות לטיפול" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">כל הסטטוסים</SelectItem>
+                  <SelectItem value="pending">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-destructive" />
+                      ממתינות לטיפול
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="responded">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-success" />
+                      נענו
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className="relative">
+                <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="חפש לפי שם תלמיד או הורה..."
+                  className="pr-10 w-[250px] bg-background/50 border-border/50"
+                />
+              </div>
+            </div>
+
+            <div className="text-sm text-muted-foreground">
+              מציג {filteredAlerts.length} מתוך {totalAlerts} התראות
+            </div>
+          </div>
+        </Card>
+
+        {/* Alerts List or Empty State */}
+        {filteredAlerts.length === 0 ? (
+          <Card className="glass-card p-12 text-center">
+            <Shield className="h-20 w-20 mx-auto text-primary/40 mb-6" />
+            <h2 className="text-xl font-bold text-foreground mb-2">אין התראות להצגה</h2>
+            <p className="text-muted-foreground mb-6">כל ההתראות טופלו - כל הכבוד!</p>
+            <Dialog open={showNewAlert} onOpenChange={setShowNewAlert}>
+              <DialogTrigger asChild>
+                <Button className="bg-primary hover:bg-primary/90">
+                  <Plus className="h-4 w-4 ml-2" />
+                  דווח למורה
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="text-right">דיווח למורה / גורם חינוכי</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4 mt-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-right block">בחר התראה לשיתוף (אופציונלי)</label>
-                    <Select value={selectedFinding} onValueChange={setSelectedFinding}>
+                    <label className="text-sm font-medium text-right block">בחר ילד</label>
+                    <Select value={selectedChild} onValueChange={setSelectedChild}>
                       <SelectTrigger className="text-right">
-                        <SelectValue placeholder="בחר התראה" />
+                        <SelectValue placeholder="בחר ילד" />
                       </SelectTrigger>
                       <SelectContent>
-                        {findings.map((finding) => (
-                          <SelectItem key={finding.id} value={finding.id}>
-                            {finding.explanation?.slice(0, 50) || "התראה"}...
+                        {children.map((child) => (
+                          <SelectItem key={child.id} value={child.id}>
+                            {child.display_name}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                )}
 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-right block">שם המורה</label>
-                  <Input
-                    value={teacherName}
-                    onChange={(e) => setTeacherName(e.target.value)}
-                    placeholder="שם המורה"
-                    className="text-right"
-                  />
+                  {findings.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-right block">בחר התראה לשיתוף (אופציונלי)</label>
+                      <Select value={selectedFinding} onValueChange={setSelectedFinding}>
+                        <SelectTrigger className="text-right">
+                          <SelectValue placeholder="בחר התראה" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {findings.map((finding) => (
+                            <SelectItem key={finding.id} value={finding.id}>
+                              {finding.explanation?.slice(0, 50) || "התראה"}...
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-right block">שם המורה</label>
+                    <Input
+                      value={teacherName}
+                      onChange={(e) => setTeacherName(e.target.value)}
+                      placeholder="שם המורה"
+                      className="text-right"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-right block">אימייל המורה *</label>
+                    <Input
+                      type="email"
+                      value={teacherEmail}
+                      onChange={(e) => setTeacherEmail(e.target.value)}
+                      placeholder="teacher@school.com"
+                      className="text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-right block">הודעה למורה</label>
+                    <Textarea
+                      value={parentMessage}
+                      onChange={(e) => setParentMessage(e.target.value)}
+                      placeholder="תאר את המצב והבקשה שלך..."
+                      className="text-right min-h-[100px]"
+                    />
+                  </div>
+
+                  <Button
+                    onClick={sendAlert}
+                    disabled={sending || !selectedChild || !teacherEmail}
+                    className="w-full"
+                  >
+                    <Send className="h-4 w-4 ml-2" />
+                    שלח דיווח
+                  </Button>
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-right block">אימייל המורה *</label>
-                  <Input
-                    type="email"
-                    value={teacherEmail}
-                    onChange={(e) => setTeacherEmail(e.target.value)}
-                    placeholder="teacher@school.com"
-                    className="text-left"
-                    dir="ltr"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-right block">הודעה למורה</label>
-                  <Textarea
-                    value={parentMessage}
-                    onChange={(e) => setParentMessage(e.target.value)}
-                    placeholder="תאר את המצב והבקשה שלך..."
-                    className="text-right min-h-[100px]"
-                  />
-                </div>
-
-                <Button
-                  onClick={sendAlert}
-                  disabled={sending || !selectedChild || !teacherEmail}
-                  className="w-full btn-glow"
-                >
-                  <Send className="h-4 w-4 ml-2" />
-                  שלח דיווח
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          <h1 className="text-2xl font-bold">דשבורד מורים</h1>
-        </div>
-
-        <Card className="glass-card p-4">
-          <div className="flex items-center gap-3 justify-end">
-            <div className="text-right">
-              <p className="font-semibold">שיתוף התראות עם גורמים חינוכיים</p>
-              <p className="text-sm text-muted-foreground">
-                שתף התראות עם מורים ויועצים ועקוב אחר הטיפול
-              </p>
-            </div>
-            <GraduationCap className="h-8 w-8 text-primary" />
-          </div>
-        </Card>
-
-        {alerts.length === 0 ? (
-          <Card className="glass-card p-12 text-center">
-            <GraduationCap className="h-16 w-16 mx-auto text-muted-foreground mb-6" />
-            <h2 className="text-xl font-bold mb-2">אין דיווחים</h2>
-            <p className="text-muted-foreground mb-6">
-              טרם שיתפת התראות עם מורים או גורמים חינוכיים
-            </p>
-            <Button onClick={() => setShowNewAlert(true)} className="btn-glow">
-              <Plus className="h-4 w-4 ml-2" />
-              דווח למורה
-            </Button>
+              </DialogContent>
+            </Dialog>
           </Card>
         ) : (
           <div className="space-y-4">
-            {alerts.map((alert) => (
-              <Card key={alert.id} className="glass-card p-4">
+            {filteredAlerts.map((alert) => (
+              <Card key={alert.id} className="glass-card p-4 hover:border-primary/50 transition-all">
                 <div className="flex items-start justify-between">
                   <div className="flex flex-col gap-2">
-                    {getStatusBadge(alert.status)}
+                    {alert.status === "pending" ? (
+                      <Badge variant="outline" className="text-warning border-warning bg-warning/10">
+                        <Clock className="h-3 w-3 ml-1" />
+                        ממתין
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-success/20 text-success border-0">
+                        <CheckCircle2 className="h-3 w-3 ml-1" />
+                        נענה
+                      </Badge>
+                    )}
                     {alert.teacher_response && (
                       <div className="mt-2 p-3 bg-success/10 rounded-lg border border-success/30">
                         <div className="flex items-center gap-2 text-success mb-1">
