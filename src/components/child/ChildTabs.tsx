@@ -6,7 +6,8 @@ import {
   AlertTriangle, 
   TrendingUp, 
   History, 
-  Settings 
+  Settings,
+  Link2
 } from 'lucide-react';
 import { OverviewTab } from './tabs/OverviewTab';
 import { ImportTab } from './tabs/ImportTab';
@@ -15,6 +16,7 @@ import { FindingsTab } from './tabs/FindingsTab';
 import { PatternsTab } from './tabs/PatternsTab';
 import { HistoryTab } from './tabs/HistoryTab';
 import { SettingsTab } from './tabs/SettingsTab';
+import { ConnectorTab } from './tabs/ConnectorTab';
 import { Child } from '@/types/database';
 
 interface ChildTabsProps {
@@ -33,6 +35,10 @@ export function ChildTabs({ child, onRefresh }: ChildTabsProps) {
         <TabsTrigger value="import" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
           <Upload className="w-4 h-4" />
           ייבוא נתונים
+        </TabsTrigger>
+        <TabsTrigger value="connector" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+          <Link2 className="w-4 h-4" />
+          חיבור WhatsApp
         </TabsTrigger>
         <TabsTrigger value="scan" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
           <Scan className="w-4 h-4" />
@@ -62,6 +68,10 @@ export function ChildTabs({ child, onRefresh }: ChildTabsProps) {
 
       <TabsContent value="import" className="animate-slide-up">
         <ImportTab child={child} onImportComplete={onRefresh} />
+      </TabsContent>
+
+      <TabsContent value="connector" className="animate-slide-up">
+        <ConnectorTab child={child} onUpdate={onRefresh} />
       </TabsContent>
 
       <TabsContent value="scan" className="animate-slide-up">
