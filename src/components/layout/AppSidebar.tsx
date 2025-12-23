@@ -19,8 +19,7 @@ const menuItems = [
   { title: 'ראשי', url: '/', icon: Home },
   { title: 'הילדים שלי', url: '/children', icon: Users },
   { title: 'התראות', url: '/alerts', icon: Bell },
-  { title: 'פרטים חמים', url: '/hotspots', icon: MessageCircle },
-  { title: 'דשבורד מים', url: '/dashboard', icon: LayoutDashboard },
+  { title: 'דשבורד מורים', url: '/teachers', icon: LayoutDashboard },
   { title: 'הגדרות', url: '/settings', icon: Settings },
 ];
 

@@ -9,6 +9,9 @@ import Auth from "./pages/Auth";
 import ChildProfile from "./pages/ChildProfile";
 import Policy from "./pages/Policy";
 import NotFound from "./pages/NotFound";
+import Children from "./pages/Children";
+import Alerts from "./pages/Alerts";
+import TeachersDashboard from "./pages/TeachersDashboard";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +27,9 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route path="/child/:childId" element={<ChildProfile />} />
             <Route path="/policy" element={<Policy />} />
+            <Route path="/children" element={<Children />} />
+            <Route path="/alerts" element={<Alerts />} />
+            <Route path="/teachers" element={<TeachersDashboard />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
