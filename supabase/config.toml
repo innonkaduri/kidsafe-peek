@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.green-api-fetch]
 verify_jwt = false
+
+[functions.green-api-qr]
+verify_jwt = false

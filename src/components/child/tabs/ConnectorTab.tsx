@@ -1,9 +1,7 @@
-import { useState, useEffect } from 'react';
-import { Link2, Loader2, CheckCircle, XCircle, RefreshCw, Wifi } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Smartphone, Loader2, CheckCircle, RefreshCw, QrCode, Wifi, WifiOff } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Child } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
@@ -14,178 +12,110 @@ interface ConnectorTabProps {
   onUpdate: () => void;
 }
 
-interface ConnectorCredential {
-  id: string;
-  instance_id: string;
-  token_encrypted: string;
-  last_checked_at: string | null;
-  data_source_id: string;
-}
+type ConnectionStatus = 'loading' | 'disconnected' | 'waiting_scan' | 'connected' | 'error';
 
 export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
-  const [credentials, setCredentials] = useState<ConnectorCredential | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [status, setStatus] = useState<ConnectionStatus>('loading');
+  const [qrCode, setQrCode] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [testResult, setTestResult] = useState<'success' | 'error' | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Form fields
-  const [instanceId, setInstanceId] = useState('');
-  const [apiToken, setApiToken] = useState('');
+  const checkStatus = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('green-api-qr', {
+        body: { action: 'status' },
+      });
+
+      if (error) throw error;
+
+      if (data.authorized) {
+        setStatus('connected');
+        setQrCode(null);
+        // Stop polling when connected
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        if (qrRefreshIntervalRef.current) {
+          clearInterval(qrRefreshIntervalRef.current);
+          qrRefreshIntervalRef.current = null;
+        }
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Status check error:', error);
+      return false;
+    }
+  }, []);
+
+  const fetchQR = useCallback(async () => {
+    try {
+      setErrorMessage(null);
+      
+      const { data, error } = await supabase.functions.invoke('green-api-qr', {
+        body: { action: 'qr' },
+      });
+
+      if (error) throw error;
+
+      if (data.type === 'qrCode' && data.message) {
+        setQrCode(data.message);
+        setStatus('waiting_scan');
+      } else if (data.type === 'alreadyLogged') {
+        setStatus('connected');
+        setQrCode(null);
+      } else if (data.type === 'error') {
+        setErrorMessage(data.message || 'שגיאה בקבלת QR');
+        setStatus('error');
+      }
+    } catch (error: any) {
+      console.error('QR fetch error:', error);
+      setErrorMessage(error.message || 'שגיאה בחיבור');
+      setStatus('error');
+    }
+  }, []);
+
+  const initializeConnection = useCallback(async () => {
+    setStatus('loading');
+    
+    // First check if already connected
+    const isConnected = await checkStatus();
+    
+    if (!isConnected) {
+      // Fetch QR code
+      await fetchQR();
+      
+      // Start polling for status every 5 seconds
+      pollIntervalRef.current = setInterval(checkStatus, 5000);
+      
+      // Refresh QR every 20 seconds (QR codes expire)
+      qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
+    }
+  }, [checkStatus, fetchQR]);
 
   useEffect(() => {
-    fetchCredentials();
-  }, [child.id]);
+    initializeConnection();
+    
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (qrRefreshIntervalRef.current) clearInterval(qrRefreshIntervalRef.current);
+    };
+  }, [initializeConnection]);
 
-  async function fetchCredentials() {
-    setLoading(true);
-
-    // First, get data source for this child with connector type
-    const { data: dataSource } = await supabase
-      .from('data_sources')
-      .select('id')
-      .eq('child_id', child.id)
-      .eq('source_type', 'connector')
-      .maybeSingle();
-
-    if (dataSource) {
-      const { data: creds } = await supabase
-        .from('connector_credentials')
-        .select('*')
-        .eq('data_source_id', dataSource.id)
-        .maybeSingle();
-
-      if (creds) {
-        setCredentials(creds);
-        setInstanceId(creds.instance_id || '');
-        setApiToken(creds.token_encrypted || '');
-      }
-    }
-
-    setLoading(false);
-  }
-
-  const saveCredentials = async () => {
-    if (!instanceId.trim() || !apiToken.trim()) {
-      toast.error('נא למלא את כל השדות');
-      return;
-    }
-
-    setSaving(true);
-
-    try {
-      // Create or get data source
-      let dataSourceId = credentials?.data_source_id;
-
-      if (!dataSourceId) {
-        const { data: newDataSource, error: dsError } = await supabase
-          .from('data_sources')
-          .insert({
-            child_id: child.id,
-            source_type: 'connector',
-            status: 'active',
-          })
-          .select('id')
-          .single();
-
-        if (dsError) throw dsError;
-        dataSourceId = newDataSource.id;
-      }
-
-      // Save or update credentials
-      if (credentials) {
-        const { error } = await supabase
-          .from('connector_credentials')
-          .update({
-            instance_id: instanceId.trim(),
-            token_encrypted: apiToken.trim(),
-          })
-          .eq('id', credentials.id);
-
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from('connector_credentials')
-          .insert({
-            data_source_id: dataSourceId,
-            instance_id: instanceId.trim(),
-            token_encrypted: apiToken.trim(),
-          });
-
-        if (error) throw error;
-      }
-
-      toast.success('הפרטים נשמרו בהצלחה');
-      fetchCredentials();
-      onUpdate();
-    } catch (error: any) {
-      toast.error('שגיאה בשמירה: ' + error.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const testConnection = async () => {
-    if (!instanceId.trim() || !apiToken.trim()) {
-      toast.error('נא למלא את כל השדות');
-      return;
-    }
-
-    setTesting(true);
-    setTestResult(null);
-
-    try {
-      // Test connection to Green API
-      const response = await fetch(
-        `https://api.green-api.com/waInstance${instanceId.trim()}/getStateInstance/${apiToken.trim()}`,
-        { method: 'GET' }
-      );
-
-      if (!response.ok) {
-        throw new Error('Connection failed');
-      }
-
-      const data = await response.json();
-      
-      if (data.stateInstance === 'authorized') {
-        setTestResult('success');
-        toast.success('החיבור תקין!');
-
-        // Update last checked
-        if (credentials) {
-          await supabase
-            .from('connector_credentials')
-            .update({ last_checked_at: new Date().toISOString() })
-            .eq('id', credentials.id);
-        }
-      } else {
-        setTestResult('error');
-        toast.error(`סטטוס: ${data.stateInstance}. נא לסרוק את קוד ה-QR ב-Green API`);
-      }
-    } catch (error: any) {
-      setTestResult('error');
-      toast.error('שגיאה בחיבור: ' + error.message);
-    } finally {
-      setTesting(false);
-    }
+  const handleRefresh = () => {
+    initializeConnection();
   };
 
   const syncMessages = async () => {
-    if (!instanceId.trim() || !apiToken.trim()) {
-      toast.error('נא למלא את כל השדות');
-      return;
-    }
-
     setSyncing(true);
 
     try {
       const { data, error } = await supabase.functions.invoke('green-api-fetch', {
-        body: {
-          child_id: child.id,
-          instance_id: instanceId.trim(),
-          api_token: apiToken.trim(),
-        },
+        body: { child_id: child.id },
       });
 
       if (error) throw error;
@@ -203,119 +133,165 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     }
   };
 
+  // Ensure data source exists for this child
+  useEffect(() => {
+    const ensureDataSource = async () => {
+      const { data: existing } = await supabase
+        .from('data_sources')
+        .select('id')
+        .eq('child_id', child.id)
+        .eq('source_type', 'connector')
+        .maybeSingle();
+
+      if (!existing) {
+        await supabase.from('data_sources').insert({
+          child_id: child.id,
+          source_type: 'connector',
+          status: 'active',
+        });
+      }
+    };
+    ensureDataSource();
+  }, [child.id]);
+
   const webhookUrl = `https://qhsvmfnjoowexmyaqgrr.supabase.co/functions/v1/green-api-webhook`;
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="glass-card">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Link2 className="w-5 h-5 text-primary" />
-            חיבור Green API (WhatsApp)
+          <CardTitle className="flex items-center gap-2 text-foreground">
+            <Smartphone className="w-5 h-5 text-primary" />
+            חיבור WhatsApp
           </CardTitle>
           <CardDescription>
-            חברו את חשבון WhatsApp לקבלת הודעות בזמן אמת
+            סרקו את הקוד עם WhatsApp לחיבור המכשיר
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {loading ? (
-            <div className="text-center py-8">
-              <Loader2 className="w-8 h-8 mx-auto animate-spin text-primary" />
+          {/* Status Badge */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">סטטוס חיבור:</span>
+            {status === 'loading' && (
+              <Badge variant="secondary" className="gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                בודק...
+              </Badge>
+            )}
+            {status === 'connected' && (
+              <Badge variant="success" className="gap-1">
+                <Wifi className="w-3 h-3" />
+                מחובר
+              </Badge>
+            )}
+            {status === 'waiting_scan' && (
+              <Badge variant="outline" className="gap-1 border-primary/50 text-primary">
+                <QrCode className="w-3 h-3" />
+                ממתין לסריקה
+              </Badge>
+            )}
+            {status === 'disconnected' && (
+              <Badge variant="secondary" className="gap-1">
+                <WifiOff className="w-3 h-3" />
+                לא מחובר
+              </Badge>
+            )}
+            {status === 'error' && (
+              <Badge variant="destructive" className="gap-1">
+                שגיאה
+              </Badge>
+            )}
+          </div>
+
+          {/* QR Code Display */}
+          {status === 'waiting_scan' && qrCode && (
+            <div className="flex flex-col items-center gap-4 py-6">
+              <div className="bg-white p-4 rounded-2xl shadow-lg">
+                <img 
+                  src={`data:image/png;base64,${qrCode}`} 
+                  alt="WhatsApp QR Code"
+                  className="w-64 h-64"
+                />
+              </div>
+              <div className="text-center space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
+                </p>
+                <p className="text-xs text-muted-foreground/60">
+                  הקוד מתרענן אוטומטית כל 20 שניות
+                </p>
+              </div>
             </div>
-          ) : (
-            <>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="instanceId">Instance ID</Label>
-                  <Input
-                    id="instanceId"
-                    value={instanceId}
-                    onChange={(e) => setInstanceId(e.target.value)}
-                    placeholder="לדוגמה: 1234567890"
-                    dir="ltr"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    ניתן למצוא ב-Green API Console
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="apiToken">API Token</Label>
-                  <Input
-                    id="apiToken"
-                    type="password"
-                    value={apiToken}
-                    onChange={(e) => setApiToken(e.target.value)}
-                    placeholder="הזינו את הטוקן"
-                    dir="ltr"
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={saveCredentials} variant="glow" disabled={saving}>
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  שמור פרטים
-                </Button>
-                <Button onClick={testConnection} variant="outline" disabled={testing}>
-                  {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-                  בדוק חיבור
-                </Button>
-                {testResult === 'success' && <Badge variant="success">מחובר</Badge>}
-                {testResult === 'error' && <Badge variant="destructive">שגיאה</Badge>}
-              </div>
-
-              {credentials && (
-                <div className="pt-4 border-t border-border space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium">סנכרון הודעות</h4>
-                      <p className="text-sm text-muted-foreground">
-                        טען הודעות קיימות מ-WhatsApp
-                      </p>
-                    </div>
-                    <Button onClick={syncMessages} variant="outline" disabled={syncing}>
-                      {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                      סנכרן עכשיו
-                    </Button>
-                  </div>
-
-                  <div className="glass-card p-4 rounded-xl">
-                    <h4 className="font-medium mb-2">Webhook URL</h4>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      הגדירו את הכתובת הזו ב-Green API לקבלת הודעות בזמן אמת:
-                    </p>
-                    <code className="block p-2 bg-muted rounded text-xs break-all" dir="ltr">
-                      {webhookUrl}
-                    </code>
-                  </div>
-
-                  {credentials.last_checked_at && (
-                    <p className="text-sm text-muted-foreground">
-                      בדיקה אחרונה: {new Date(credentials.last_checked_at).toLocaleString('he-IL')}
-                    </p>
-                  )}
-                </div>
-              )}
-            </>
           )}
+
+          {/* Connected State */}
+          {status === 'connected' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="w-20 h-20 rounded-full bg-success/20 flex items-center justify-center">
+                <CheckCircle className="w-10 h-10 text-success" />
+              </div>
+              <div className="text-center">
+                <h3 className="font-medium text-foreground">WhatsApp מחובר!</h3>
+                <p className="text-sm text-muted-foreground">
+                  ההודעות יתקבלו אוטומטית
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Loading State */}
+          {status === 'loading' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Loader2 className="w-12 h-12 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">מתחבר...</p>
+            </div>
+          )}
+
+          {/* Error State */}
+          {status === 'error' && (
+            <div className="text-center py-8 space-y-4">
+              <p className="text-sm text-destructive">{errorMessage}</p>
+              <Button onClick={handleRefresh} variant="outline">
+                <RefreshCw className="w-4 h-4 ml-2" />
+                נסה שוב
+              </Button>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap gap-2 pt-4 border-t border-border">
+            {status !== 'loading' && (
+              <Button onClick={handleRefresh} variant="outline" size="sm">
+                <RefreshCw className="w-4 h-4 ml-2" />
+                רענן
+              </Button>
+            )}
+            {status === 'connected' && (
+              <Button onClick={syncMessages} variant="glow" size="sm" disabled={syncing}>
+                {syncing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : null}
+                סנכרן הודעות קיימות
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>הוראות התקנה</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm text-muted-foreground">
-          <ol className="list-decimal list-inside space-y-2 mr-4">
-            <li>היכנסו ל-<a href="https://green-api.com" target="_blank" rel="noopener" className="text-primary hover:underline">green-api.com</a> וצרו חשבון</li>
-            <li>צרו Instance חדש וסרקו את קוד ה-QR עם WhatsApp</li>
-            <li>העתיקו את Instance ID ו-API Token לשדות למעלה</li>
-            <li>הגדירו את Webhook URL בהגדרות ה-Instance</li>
-            <li>לחצו "בדוק חיבור" לוודא שהכל עובד</li>
-          </ol>
-        </CardContent>
-      </Card>
+      {/* Webhook Info - Only show when connected */}
+      {status === 'connected' && (
+        <Card className="glass-card">
+          <CardHeader>
+            <CardTitle className="text-sm text-foreground">הגדרות Webhook</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              הגדירו את הכתובת הזו ב-Green API Console לקבלת הודעות בזמן אמת:
+            </p>
+            <code className="block p-3 bg-muted rounded-lg text-xs break-all text-foreground" dir="ltr">
+              {webhookUrl}
+            </code>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

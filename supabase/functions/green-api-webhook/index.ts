@@ -49,6 +49,7 @@ serve(async (req) => {
   try {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const expectedInstanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -64,39 +65,61 @@ serve(async (req) => {
 
     const instanceId = webhookData.instanceData.idInstance.toString();
 
+    // Verify this is our instance
+    if (expectedInstanceId && instanceId !== expectedInstanceId) {
+      console.log("Ignoring webhook from different instance:", instanceId);
+      return new Response(JSON.stringify({ status: "wrong_instance" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Find the data source and child associated with this instance
-    const { data: credential, error: credError } = await supabase
+    // First try by instance_id in connector_credentials
+    let childId: string | null = null;
+    
+    const { data: credential } = await supabase
       .from("connector_credentials")
       .select(`
         id,
         data_source_id,
         data_sources!inner(
           id,
-          child_id,
-          children!inner(
-            id,
-            user_id
-          )
+          child_id
         )
       `)
       .eq("instance_id", instanceId)
-      .single();
+      .maybeSingle();
 
-    if (credError || !credential) {
-      console.error("No matching credential found for instance:", instanceId);
-      return new Response(JSON.stringify({ status: "no_credential" }), {
+    if (credential) {
+      childId = (credential.data_sources as any).child_id;
+    } else {
+      // Fallback: find any child with connector data source (for global instance)
+      const { data: anyDataSource } = await supabase
+        .from("data_sources")
+        .select("child_id")
+        .eq("source_type", "connector")
+        .limit(1)
+        .maybeSingle();
+      
+      if (anyDataSource) {
+        childId = anyDataSource.child_id;
+      }
+    }
+
+    if (!childId) {
+      console.error("No child found for this instance");
+      return new Response(JSON.stringify({ status: "no_child" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const childId = (credential.data_sources as any).child_id;
-    const chatId = webhookData.senderData.chatId;
     const chatName = webhookData.senderData.senderContactName || 
                      webhookData.senderData.senderName || 
                      webhookData.senderData.chatName;
+    const chatId = webhookData.senderData.chatId;
 
     // Find or create chat
-    let { data: chat, error: chatError } = await supabase
+    let { data: chat } = await supabase
       .from("chats")
       .select("id")
       .eq("child_id", childId)

@@ -8,8 +8,6 @@ const corsHeaders = {
 
 interface FetchRequest {
   child_id: string;
-  instance_id: string;
-  api_token: string;
 }
 
 interface GreenAPIChat {
@@ -39,17 +37,27 @@ serve(async (req) => {
   try {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const instanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
+    const apiToken = Deno.env.get("GREEN_API_TOKEN");
+
+    if (!instanceId || !apiToken) {
+      console.error("Missing GREEN_API credentials in secrets");
+      return new Response(
+        JSON.stringify({ error: "Missing Green API credentials" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    const { child_id, instance_id, api_token }: FetchRequest = await req.json();
+    const { child_id }: FetchRequest = await req.json();
 
-    console.log(`Fetching messages for child ${child_id} from Green API instance ${instance_id}`);
+    console.log(`Fetching messages for child ${child_id} from Green API instance ${instanceId}`);
 
-    const baseUrl = `https://api.green-api.com/waInstance${instance_id}`;
+    const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
 
     // Fetch recent chats
-    const chatsResponse = await fetch(`${baseUrl}/getChats/${api_token}`, {
+    const chatsResponse = await fetch(`${baseUrl}/getChats/${apiToken}`, {
       method: "GET",
     });
 
@@ -98,7 +106,7 @@ serve(async (req) => {
         }
 
         // Fetch messages for this chat
-        const messagesResponse = await fetch(`${baseUrl}/getChatHistory/${api_token}`, {
+        const messagesResponse = await fetch(`${baseUrl}/getChatHistory/${apiToken}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chatId: chat.id, count: 50 }),
