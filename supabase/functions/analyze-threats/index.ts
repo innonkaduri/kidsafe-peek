@@ -1,5 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -35,6 +36,55 @@ interface MediaAnalysisResult {
 
 const ASSISTANT_ID = "asst_epnwyX2RqHBRjbDdN4YQIYPs";
 
+// Helper function to verify user authentication and child ownership
+async function verifyAuthAndOwnership(
+  req: Request,
+  childId: string
+): Promise<{ userId: string } | Response> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) {
+    return new Response(
+      JSON.stringify({ error: "Missing Authorization header" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  
+  const supabaseAuth = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!
+  );
+
+  const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
+  
+  if (authError || !user) {
+    console.error("Auth error:", authError);
+    return new Response(
+      JSON.stringify({ error: "Unauthorized" }),
+      { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Verify user owns the child
+  const { data: child, error: childError } = await supabaseAuth
+    .from("children")
+    .select("id")
+    .eq("id", childId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (childError || !child) {
+    console.error("Child ownership verification failed:", childError);
+    return new Response(
+      JSON.stringify({ error: "Forbidden - You do not own this child resource" }),
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  return { userId: user.id };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -46,12 +96,19 @@ serve(async (req) => {
       throw new Error("OPENAI_API_KEY is not configured");
     }
 
-    const { child_id, scan_id, messages, lookback_window }: AnalysisRequest = await req.json();
+    // Clone request to read body twice (once for auth, once for processing)
+    const requestBody = await req.json();
+    const { child_id, scan_id, messages, lookback_window }: AnalysisRequest = requestBody;
 
-    console.log(`Analyzing ${messages.length} messages for child ${child_id}, scan ${scan_id}`);
+    // Verify authentication and child ownership
+    const authResult = await verifyAuthAndOwnership(req, child_id);
+    if (authResult instanceof Response) {
+      return authResult;
+    }
+
+    console.log(`Authenticated user ${authResult.userId} analyzing messages for child ${child_id}`);
 
     if (!messages || messages.length === 0) {
-      console.log("No messages to analyze");
       return new Response(
         JSON.stringify({
           threatDetected: false,
@@ -67,7 +124,6 @@ serve(async (req) => {
 
     // Limit messages to avoid token overflow - take most recent 50 messages
     const limitedMessages = messages.slice(-50);
-    console.log(`Limited to ${limitedMessages.length} messages (from ${messages.length})`);
 
     // Analyze media messages with GPT Vision
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -77,28 +133,27 @@ serve(async (req) => {
       (msg) => msg.media_url && ["image"].includes(msg.msg_type)
     );
     
-    console.log(`Found ${mediaMessages.length} media messages to analyze`);
-    
     // Analyze media in parallel (up to 5 at a time)
     if (mediaMessages.length > 0 && SUPABASE_URL) {
+      const authHeader = req.headers.get("Authorization");
       const analyzeMedia = async (msg: Message): Promise<void> => {
         try {
           const response = await fetch(`${SUPABASE_URL}/functions/v1/analyze-media`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+              "Authorization": authHeader || "",
             },
             body: JSON.stringify({
               media_url: msg.media_url,
               media_type: msg.msg_type,
+              child_id: child_id,
             }),
           });
           
           if (response.ok) {
             const result = await response.json();
             mediaAnalysisResults.set(msg.id, result);
-            console.log(`Media analysis for ${msg.id}: ${result.risk_level}`);
           }
         } catch (error) {
           console.error(`Failed to analyze media ${msg.id}:`, error);
@@ -138,7 +193,7 @@ serve(async (req) => {
         isChild: msg.is_child_sender,
         type: msg.msg_type,
         time: msg.message_timestamp,
-        content: content.slice(0, 500), // Allow more content for media descriptions
+        content: content.slice(0, 500),
         chat: msg.chat_name || "שיחה",
         mediaRiskLevel: mediaAnalysis?.risk_level || null,
       };
@@ -178,8 +233,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
   "explanation": string
 }`;
 
-    console.log("Creating thread with OpenAI Assistants API...");
-
     // Step 1: Create a thread
     const threadResponse = await fetch("https://api.openai.com/v1/threads", {
       method: "POST",
@@ -198,7 +251,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
     }
 
     const thread = await threadResponse.json();
-    console.log("Thread created:", thread.id);
 
     // Step 2: Add message to thread
     const messageResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
@@ -220,8 +272,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
       throw new Error(`Failed to add message: ${messageResponse.status}`);
     }
 
-    console.log("Message added to thread");
-
     // Step 3: Run the assistant
     const runResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
       method: "POST",
@@ -242,13 +292,12 @@ ${JSON.stringify(formattedMessages, null, 2)}
     }
 
     const run = await runResponse.json();
-    console.log("Run created:", run.id);
 
     // Step 4: Poll for completion
     let runStatus = run.status;
     let lastError: { code?: string; message?: string } | null = null;
     let attempts = 0;
-    const maxAttempts = 60; // 60 seconds max
+    const maxAttempts = 60;
 
     const isTerminal = (s: string) => ["completed", "failed", "cancelled", "expired"].includes(s);
 
@@ -273,8 +322,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
       runStatus = statusData.status ?? runStatus;
       lastError = statusData.last_error ?? lastError;
       attempts++;
-
-      console.log(`Run status: ${runStatus} (attempt ${attempts})`);
 
       if (runStatus === "requires_action") {
         console.error("Assistant run requires_action; tool calls are not supported in this function.");
@@ -314,8 +361,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
       throw new Error("No content in assistant message");
     }
 
-    console.log("Assistant response received");
-
     // Parse JSON from response
     let analysisResult;
     try {
@@ -335,11 +380,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
         explanation: "לא ניתן לנתח את התוכן כרגע",
       };
     }
-
-    console.log("Analysis complete:", {
-      threatDetected: analysisResult.threatDetected,
-      riskLevel: analysisResult.riskLevel,
-    });
 
     return new Response(JSON.stringify(analysisResult), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
