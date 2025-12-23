@@ -1,4 +1,4 @@
-import { Home, Users, Bell, MessageCircle, LayoutDashboard, Settings, Shield, Star } from 'lucide-react';
+import { Home, Users, Bell, MessageCircle, LayoutDashboard, Settings, Shield, Star, Heart } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
@@ -19,6 +19,7 @@ const menuItems = [
   { title: 'ראשי', url: '/', icon: Home },
   { title: 'הילדים שלי', url: '/children', icon: Users },
   { title: 'התראות', url: '/alerts', icon: Bell },
+  { title: 'פורום הורים', url: '/forum', icon: Heart },
   { title: 'דשבורד מורים', url: '/teachers', icon: LayoutDashboard },
   { title: 'הגדרות', url: '/settings', icon: Settings },
 ];
