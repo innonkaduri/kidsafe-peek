@@ -1,5 +1,5 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,56 +23,17 @@ interface AnalysisRequest {
   lookback_window: string;
 }
 
-const SYSTEM_PROMPT = `אתה מומחה לבטיחות ילדים באינטרנט. תפקידך לנתח שיחות הודעות ולזהות סיכונים פוטנציאליים.
-
-עליך לזהות את סוגי האיומים הבאים:
-- harassment_bullying: הטרדה או בריונות
-- coercion_pressure: לחץ או כפייה לעשות משהו
-- extortion_blackmail: סחיטה או איומים
-- adult_inappropriate: קשר לא הולם עם מבוגרים או תוכן למבוגרים
-- scams_fraud: הונאות או ניסיונות רמאות
-- violence_threats: איומים באלימות
-
-עליך להחזיר את התוצאה בפורמט JSON בלבד עם המבנה הבא:
-{
-  "threatDetected": boolean,
-  "riskLevel": "low" | "medium" | "high" | "critical" | null,
-  "threatTypes": string[],
-  "triggers": [
-    {
-      "messageId": string,
-      "type": "text" | "image" | "audio",
-      "preview": string,
-      "confidence": number
-    }
-  ],
-  "patterns": [
-    {
-      "chatId": string,
-      "patternType": string,
-      "description": string,
-      "confidence": number
-    }
-  ],
-  "explanation": string
-}
-
-הנחיות חשובות:
-1. אל תייצר ממצאים שקריים - אם אין סיכון אמיתי, החזר threatDetected: false
-2. הסבר קצר וברור בעברית, ללא תוכן גרפי
-3. התמקד בדפוסים מסוכנים: בקשות לסודיות, לחץ לשתף תמונות, ניסיונות קשר מתמשכים מזרים
-4. דרג את הסיכון לפי חומרה אמיתית`;
+const ASSISTANT_ID = "asst_epnwyX2RqHBRjbDdN4YQIYPs";
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+    if (!OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY is not configured");
     }
 
     const { child_id, scan_id, messages, lookback_window }: AnalysisRequest = await req.json();
@@ -105,73 +66,164 @@ serve(async (req) => {
       chat: msg.chat_name || "שיחה",
     }));
 
+    const lookbackLabel = lookback_window === "24h" ? "24 שעות אחרונות" : 
+                          lookback_window === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים";
+
     const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
 
-טווח ניתוח: ${lookback_window === "24h" ? "24 שעות אחרונות" : lookback_window === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים"}
+טווח ניתוח: ${lookbackLabel}
 
 הודעות לניתוח:
 ${JSON.stringify(formattedMessages, null, 2)}
 
-החזר תשובה בפורמט JSON בלבד.`;
+החזר תשובה בפורמט JSON בלבד עם המבנה הבא:
+{
+  "threatDetected": boolean,
+  "riskLevel": "low" | "medium" | "high" | "critical" | null,
+  "threatTypes": string[],
+  "triggers": [
+    {
+      "messageId": string,
+      "type": "text" | "image" | "audio",
+      "preview": string,
+      "confidence": number
+    }
+  ],
+  "patterns": [
+    {
+      "chatId": string,
+      "patternType": string,
+      "description": string,
+      "confidence": number
+    }
+  ],
+  "explanation": string
+}`;
 
-    console.log("Sending request to Lovable AI Gateway...");
+    console.log("Creating thread with OpenAI Assistants API...");
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    // Step 1: Create a thread
+    const threadResponse = await fetch("https://api.openai.com/v1/threads", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({}),
+    });
+
+    if (!threadResponse.ok) {
+      const errorText = await threadResponse.text();
+      console.error("Failed to create thread:", errorText);
+      throw new Error(`Failed to create thread: ${threadResponse.status}`);
+    }
+
+    const thread = await threadResponse.json();
+    console.log("Thread created:", thread.id);
+
+    // Step 2: Add message to thread
+    const messageResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
+        role: "user",
+        content: userPrompt,
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limits exceeded, please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "Payment required, please add funds to your Lovable AI workspace." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      throw new Error(`AI Gateway error: ${response.status}`);
+    if (!messageResponse.ok) {
+      const errorText = await messageResponse.text();
+      console.error("Failed to add message:", errorText);
+      throw new Error(`Failed to add message: ${messageResponse.status}`);
     }
 
-    const aiResponse = await response.json();
-    console.log("AI response received");
+    console.log("Message added to thread");
 
-    const content = aiResponse.choices?.[0]?.message?.content;
+    // Step 3: Run the assistant
+    const runResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        assistant_id: ASSISTANT_ID,
+      }),
+    });
+
+    if (!runResponse.ok) {
+      const errorText = await runResponse.text();
+      console.error("Failed to create run:", errorText);
+      throw new Error(`Failed to create run: ${runResponse.status}`);
+    }
+
+    const run = await runResponse.json();
+    console.log("Run created:", run.id);
+
+    // Step 4: Poll for completion
+    let runStatus = run.status;
+    let attempts = 0;
+    const maxAttempts = 60; // 60 seconds max
+
+    while (runStatus !== "completed" && runStatus !== "failed" && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
+        headers: {
+          "Authorization": `Bearer ${OPENAI_API_KEY}`,
+          "OpenAI-Beta": "assistants=v2",
+        },
+      });
+
+      const statusData = await statusResponse.json();
+      runStatus = statusData.status;
+      attempts++;
+      
+      console.log(`Run status: ${runStatus} (attempt ${attempts})`);
+    }
+
+    if (runStatus !== "completed") {
+      throw new Error(`Run did not complete. Final status: ${runStatus}`);
+    }
+
+    // Step 5: Get messages
+    const messagesResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+    });
+
+    const messagesData = await messagesResponse.json();
+    const assistantMessage = messagesData.data.find((m: any) => m.role === "assistant");
+    
+    if (!assistantMessage) {
+      throw new Error("No assistant message found");
+    }
+
+    const content = assistantMessage.content[0]?.text?.value;
     if (!content) {
-      throw new Error("No content in AI response");
+      throw new Error("No content in assistant message");
     }
 
-    // Parse JSON from response (handle markdown code blocks)
+    console.log("Assistant response received");
+
+    // Parse JSON from response
     let analysisResult;
     try {
-      // Remove markdown code blocks if present
       const cleanedContent = content
         .replace(/```json\n?/g, "")
         .replace(/```\n?/g, "")
         .trim();
       analysisResult = JSON.parse(cleanedContent);
     } catch (parseError) {
-      console.error("Failed to parse AI response:", content);
-      // Return a safe default if parsing fails
+      console.error("Failed to parse assistant response:", content);
       analysisResult = {
         threatDetected: false,
         riskLevel: null,
