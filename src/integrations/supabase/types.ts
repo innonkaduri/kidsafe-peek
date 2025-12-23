@@ -303,6 +303,30 @@ export type Database = {
           },
         ]
       }
+      forum_messages: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       imports: {
         Row: {
           chats_count: number | null
@@ -558,6 +582,66 @@ export type Database = {
             columns: ["child_id"]
             isOneToOne: false
             referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      teacher_alerts: {
+        Row: {
+          child_id: string
+          created_at: string
+          finding_id: string | null
+          id: string
+          parent_message: string | null
+          parent_user_id: string
+          responded_at: string | null
+          status: string
+          teacher_email: string
+          teacher_name: string | null
+          teacher_response: string | null
+          updated_at: string
+        }
+        Insert: {
+          child_id: string
+          created_at?: string
+          finding_id?: string | null
+          id?: string
+          parent_message?: string | null
+          parent_user_id: string
+          responded_at?: string | null
+          status?: string
+          teacher_email: string
+          teacher_name?: string | null
+          teacher_response?: string | null
+          updated_at?: string
+        }
+        Update: {
+          child_id?: string
+          created_at?: string
+          finding_id?: string | null
+          id?: string
+          parent_message?: string | null
+          parent_user_id?: string
+          responded_at?: string | null
+          status?: string
+          teacher_email?: string
+          teacher_name?: string | null
+          teacher_response?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "teacher_alerts_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "teacher_alerts_finding_id_fkey"
+            columns: ["finding_id"]
+            isOneToOne: false
+            referencedRelation: "findings"
             referencedColumns: ["id"]
           },
         ]
