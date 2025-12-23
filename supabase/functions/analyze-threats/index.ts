@@ -55,14 +55,18 @@ serve(async (req) => {
       );
     }
 
-    // Format messages for analysis
-    const formattedMessages = messages.map((msg) => ({
+    // Limit messages to avoid token overflow - take most recent 50 messages
+    const limitedMessages = messages.slice(-50);
+    console.log(`Limited to ${limitedMessages.length} messages (from ${messages.length})`);
+
+    // Format messages for analysis - truncate long content
+    const formattedMessages = limitedMessages.map((msg) => ({
       id: msg.id,
       sender: msg.sender_label,
       isChild: msg.is_child_sender,
       type: msg.msg_type,
       time: msg.message_timestamp,
-      content: msg.text_content || "[מדיה]",
+      content: (msg.text_content || "[מדיה]").slice(0, 300), // Limit content to 300 chars
       chat: msg.chat_name || "שיחה",
     }));
 
