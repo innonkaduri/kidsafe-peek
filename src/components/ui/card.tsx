@@ -10,7 +10,7 @@ const cardVariants = cva(
         default: "glass-card",
         solid: "bg-muted border border-border",
         outline: "border border-border bg-transparent",
-        elevated: "glass-card hover:shadow-xl hover:-translate-y-1",
+        elevated: "glass-card",
         risk: "glass-card border-r-4",
       },
     },
