@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Scan as ScanIcon, Clock, Loader2, CheckCircle, AlertTriangle, Zap } from 'lucide-react';
+import { Scan as ScanIcon, Clock, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Child, LookbackWindow } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -31,6 +32,11 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   const [lookback, setLookback] = useState<LookbackWindow>('7d');
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [promptPreview, setPromptPreview] = useState<{
+    userPrompt: string;
+    messagesCount: number;
+    limitedCount: number;
+  } | null>(null);
   const [result, setResult] = useState<{
     threatDetected: boolean;
     riskLevel: string | null;
@@ -38,10 +44,110 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     patternsCount: number;
   } | null>(null);
 
+  // Build the prompt (same logic as edge function)
+  const buildPrompt = (messages: any[], lookbackWindow: LookbackWindow) => {
+    const limitedMessages = messages.slice(-50);
+    
+    const formattedMessages = limitedMessages.map((msg) => ({
+      id: msg.id,
+      sender: msg.sender_label,
+      isChild: msg.is_child_sender,
+      type: msg.msg_type,
+      time: msg.message_timestamp,
+      content: (msg.text_content || "[מדיה]").slice(0, 300),
+      chat: msg.chat_name || "שיחה",
+    }));
+
+    const lookbackLabel = lookbackWindow === "24h" ? "24 שעות אחרונות" : 
+                          lookbackWindow === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים";
+
+    const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
+
+טווח ניתוח: ${lookbackLabel}
+
+הודעות לניתוח:
+${JSON.stringify(formattedMessages, null, 2)}
+
+החזר תשובה בפורמט JSON בלבד עם המבנה הבא:
+{
+  "threatDetected": boolean,
+  "riskLevel": "low" | "medium" | "high" | "critical" | null,
+  "threatTypes": string[],
+  "triggers": [
+    {
+      "messageId": string,
+      "type": "text" | "image" | "audio",
+      "preview": string,
+      "confidence": number
+    }
+  ],
+  "patterns": [
+    {
+      "chatId": string,
+      "patternType": string,
+      "description": string,
+      "confidence": number
+    }
+  ],
+  "explanation": string
+}`;
+
+    return {
+      userPrompt,
+      messagesCount: messages.length,
+      limitedCount: limitedMessages.length,
+    };
+  };
+
+  const previewPrompt = async () => {
+    try {
+      // Calculate lookback date
+      const lookbackDate = new Date();
+      lookbackDate.setHours(lookbackDate.getHours() - lookbackHours[lookback]);
+
+      // Fetch messages for analysis
+      const { data: messages, error: messagesError } = await supabase
+        .from('messages')
+        .select(`
+          id,
+          sender_label,
+          is_child_sender,
+          msg_type,
+          message_timestamp,
+          text_content,
+          chat_id,
+          chats!inner(chat_name)
+        `)
+        .eq('child_id', child.id)
+        .gte('message_timestamp', lookbackDate.toISOString())
+        .order('message_timestamp', { ascending: true });
+
+      if (messagesError) throw messagesError;
+
+      // Format messages with chat names
+      const formattedMessages = (messages || []).map((msg: any) => ({
+        id: msg.id,
+        sender_label: msg.sender_label,
+        is_child_sender: msg.is_child_sender,
+        msg_type: msg.msg_type,
+        message_timestamp: msg.message_timestamp,
+        text_content: msg.text_content,
+        chat_name: msg.chats?.chat_name,
+      }));
+
+      const prompt = buildPrompt(formattedMessages, lookback);
+      setPromptPreview(prompt);
+    } catch (error: any) {
+      console.error('Error building preview:', error);
+      toast.error('שגיאה בטעינת הפרומפט: ' + error.message);
+    }
+  };
+
   const startScan = async () => {
     setScanning(true);
     setProgress(0);
     setResult(null);
+    setPromptPreview(null);
 
     try {
       // Create scan record
@@ -223,7 +329,7 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {!scanning && !result && (
+          {!scanning && !result && !promptPreview && (
             <>
               <div className="space-y-4">
                 <Label className="text-base font-heebo">בחרו טווח זמן לסריקה:</Label>
@@ -257,11 +363,60 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
                 </p>
               </div>
 
-              <Button onClick={startScan} variant="glow" size="lg" className="w-full">
-                <Zap className="w-5 h-5" />
-                התחל סריקה
-              </Button>
+              <div className="flex gap-3">
+                <Button onClick={previewPrompt} variant="outline" size="lg" className="flex-1">
+                  <Eye className="w-5 h-5" />
+                  הצג פרומפט לבדיקה
+                </Button>
+                <Button onClick={startScan} variant="glow" size="lg" className="flex-1">
+                  <Zap className="w-5 h-5" />
+                  התחל סריקה
+                </Button>
+              </div>
             </>
+          )}
+
+          {promptPreview && !scanning && !result && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-heebo font-bold text-lg">תצוגה מקדימה של הפרומפט</h3>
+                <Button variant="ghost" size="sm" onClick={() => setPromptPreview(null)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+              
+              <div className="glass-card p-4 rounded-xl space-y-2">
+                <p className="text-sm">
+                  <strong>סה"כ הודעות:</strong> {promptPreview.messagesCount}
+                </p>
+                <p className="text-sm">
+                  <strong>נשלחות לניתוח:</strong> {promptPreview.limitedCount} (מוגבל ל-50 אחרונות)
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="font-bold">User Prompt (נשלח ל-Assistant):</Label>
+                <ScrollArea className="h-[400px] border rounded-lg p-4 bg-muted/50" dir="ltr">
+                  <pre className="text-xs whitespace-pre-wrap font-mono text-left">
+                    {promptPreview.userPrompt}
+                  </pre>
+                </ScrollArea>
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                <strong>System Prompt:</strong> מוגדר ב-OpenAI Assistant עם ID: <code className="bg-muted px-1 rounded">asst_epnwyX2RqHBRjbDdN4YQIYPs</code>
+              </p>
+
+              <div className="flex gap-3">
+                <Button onClick={() => setPromptPreview(null)} variant="outline" size="lg" className="flex-1">
+                  חזרה
+                </Button>
+                <Button onClick={startScan} variant="glow" size="lg" className="flex-1">
+                  <Zap className="w-5 h-5" />
+                  התחל סריקה
+                </Button>
+              </div>
+            </div>
           )}
 
           {scanning && (
