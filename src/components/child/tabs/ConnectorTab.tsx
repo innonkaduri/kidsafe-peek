@@ -89,11 +89,11 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
       // Fetch QR code
       await fetchQR();
       
-      // Start polling for status every 5 seconds
-      pollIntervalRef.current = setInterval(checkStatus, 5000);
+      // Start polling for status every 10 seconds (reduced to avoid rate limiting)
+      pollIntervalRef.current = setInterval(checkStatus, 10000);
       
-      // Refresh QR every 20 seconds (QR codes expire)
-      qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
+      // Refresh QR every 45 seconds (QR codes expire, but avoid rate limiting)
+      qrRefreshIntervalRef.current = setInterval(fetchQR, 45000);
     }
   }, [checkStatus, fetchQR]);
 
@@ -218,7 +218,7 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
                   פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
                 </p>
                 <p className="text-xs text-muted-foreground/60">
-                  הקוד מתרענן אוטומטית כל 20 שניות
+                  הקוד מתרענן אוטומטית כל 45 שניות
                 </p>
               </div>
             </div>

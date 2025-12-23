@@ -51,6 +51,15 @@ serve(async (req) => {
       console.log("Checking Green API connection status");
       const stateResponse = await fetch(`${baseUrl}/getStateInstance/${apiToken}`);
       
+      if (stateResponse.status === 429) {
+        // Rate limited - return unknown status, don't throw
+        console.log("Rate limited, returning unknown status");
+        return new Response(
+          JSON.stringify({ status: "unknown", authorized: false, rateLimited: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
       if (!stateResponse.ok) {
         throw new Error(`Status check failed: ${stateResponse.status}`);
       }
@@ -70,6 +79,14 @@ serve(async (req) => {
     // Default: Get QR code
     console.log("Fetching QR code from Green API");
     const qrResponse = await fetch(`${baseUrl}/qr/${apiToken}`);
+    
+    if (qrResponse.status === 429) {
+      console.log("Rate limited on QR fetch");
+      return new Response(
+        JSON.stringify({ type: "error", message: "Rate limited, please wait", rateLimited: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
     
     if (!qrResponse.ok) {
       throw new Error(`QR fetch failed: ${qrResponse.status}`);
