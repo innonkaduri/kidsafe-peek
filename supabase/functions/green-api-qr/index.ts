@@ -88,6 +88,14 @@ serve(async (req) => {
       );
     }
     
+    if (qrResponse.status === 504 || qrResponse.status === 502 || qrResponse.status === 503) {
+      console.log("Green API timeout/unavailable:", qrResponse.status);
+      return new Response(
+        JSON.stringify({ type: "error", message: "Green API זמנית לא זמין, נסה שוב", timeout: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     if (!qrResponse.ok) {
       throw new Error(`QR fetch failed: ${qrResponse.status}`);
     }
