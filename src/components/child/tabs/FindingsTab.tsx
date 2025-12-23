@@ -47,6 +47,8 @@ export function FindingsTab({ child }: FindingsTabProps) {
   const [riskFilter, setRiskFilter] = useState<string>('all');
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
+  const [contextMessages, setContextMessages] = useState<any[]>([]);
+  const [loadingContext, setLoadingContext] = useState(false);
 
   useEffect(() => {
     fetchFindings();
@@ -75,9 +77,63 @@ export function FindingsTab({ child }: FindingsTabProps) {
     setLoading(false);
   }
 
-  const openContextDialog = (finding: Finding) => {
+  const openContextDialog = async (finding: Finding) => {
     setSelectedFinding(finding);
     setContextDialogOpen(true);
+    setLoadingContext(true);
+    setContextMessages([]);
+
+    // Fetch evidence items for this finding to get the related messages
+    const { data: evidenceItems } = await supabase
+      .from('evidence_items')
+      .select('message_id, preview_text')
+      .eq('finding_id', finding.id);
+
+    if (evidenceItems && evidenceItems.length > 0) {
+      const messageIds = evidenceItems.map(e => e.message_id).filter(Boolean);
+      
+      if (messageIds.length > 0) {
+        // Get the flagged messages
+        const { data: flaggedMessages } = await supabase
+          .from('messages')
+          .select('*, chats(chat_name)')
+          .in('id', messageIds);
+
+        if (flaggedMessages && flaggedMessages.length > 0) {
+          // Get the chat_id and timestamp to find surrounding messages
+          const firstMessage = flaggedMessages[0];
+          const chatId = firstMessage.chat_id;
+          const timestamp = firstMessage.message_timestamp;
+
+          // Get messages around the flagged one (5 before and 5 after)
+          const { data: surroundingMessages } = await supabase
+            .from('messages')
+            .select('*, chats(chat_name)')
+            .eq('chat_id', chatId)
+            .order('message_timestamp', { ascending: true })
+            .limit(20);
+
+          if (surroundingMessages) {
+            // Find the index of the flagged message and get context around it
+            const flaggedIndex = surroundingMessages.findIndex(m => m.id === firstMessage.id);
+            const start = Math.max(0, flaggedIndex - 5);
+            const end = Math.min(surroundingMessages.length, flaggedIndex + 6);
+            const contextSlice = surroundingMessages.slice(start, end);
+            
+            // Mark which messages are flagged
+            const flaggedIds = new Set(messageIds);
+            const messagesWithFlags = contextSlice.map(m => ({
+              ...m,
+              isFlagged: flaggedIds.has(m.id)
+            }));
+            
+            setContextMessages(messagesWithFlags);
+          }
+        }
+      }
+    }
+    
+    setLoadingContext(false);
   };
 
   const getRiskBorderColor = (level: string) => {
@@ -204,19 +260,32 @@ export function FindingsTab({ child }: FindingsTabProps) {
               <div className="glass-card p-4 rounded-xl">
                 <h4 className="font-medium mb-2">הודעות סביבת הממצא:</h4>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
-                  <div className="text-sm p-3 rounded-lg bg-secondary/50">
-                    <span className="text-muted-foreground text-xs">זר • לפני 2 שעות</span>
-                    <p>היי יפה/יפה, רוצה להכיר?</p>
-                  </div>
-                  <div className="text-sm p-3 rounded-lg bg-primary/10 mr-8">
-                    <span className="text-muted-foreground text-xs">הילד/ה • לפני שעה</span>
-                    <p>מי זה?</p>
-                  </div>
-                  <div className="text-sm p-3 rounded-lg bg-destructive/10 border border-destructive/30">
-                    <span className="text-muted-foreground text-xs">זר • לפני 30 דקות</span>
-                    <p>לא משנה, תשלחי תמונה?</p>
-                    <Badge variant="riskHigh" className="mt-2">ממצא</Badge>
-                  </div>
+                  {loadingContext ? (
+                    <div className="text-center py-4 text-muted-foreground">טוען הודעות...</div>
+                  ) : contextMessages.length === 0 ? (
+                    <div className="text-center py-4 text-muted-foreground">לא נמצאו הודעות קשורות</div>
+                  ) : (
+                    contextMessages.map((msg) => (
+                      <div 
+                        key={msg.id}
+                        className={`text-sm p-3 rounded-lg ${
+                          msg.isFlagged 
+                            ? 'bg-destructive/10 border border-destructive/30' 
+                            : msg.is_child_sender 
+                              ? 'bg-primary/10 mr-8' 
+                              : 'bg-secondary/50'
+                        }`}
+                      >
+                        <span className="text-muted-foreground text-xs">
+                          {msg.is_child_sender ? 'הילד/ה' : msg.sender_label || 'זר'} • {formatDistanceToNow(new Date(msg.message_timestamp), { addSuffix: true, locale: he })}
+                        </span>
+                        <p>{msg.text_content || msg.text_excerpt || '[מדיה]'}</p>
+                        {msg.isFlagged && (
+                          <Badge variant="riskHigh" className="mt-2">ממצא</Badge>
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
