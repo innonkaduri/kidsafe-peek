@@ -6,6 +6,14 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+interface FileMessageData {
+  downloadUrl?: string;
+  caption?: string;
+  mimeType?: string;
+  fileName?: string;
+  jpegThumbnail?: string;
+}
+
 interface GreenAPIMessage {
   typeWebhook: string;
   instanceData: {
@@ -30,13 +38,11 @@ interface GreenAPIMessage {
     extendedTextMessageData?: {
       text: string;
     };
-    imageMessage?: {
-      caption?: string;
-      jpegThumbnail?: string;
-    };
-    audioMessage?: {
-      downloadUrl: string;
-    };
+    imageMessage?: FileMessageData;
+    videoMessage?: FileMessageData;
+    audioMessage?: FileMessageData;
+    documentMessage?: FileMessageData;
+    fileMessageData?: FileMessageData;
   };
 }
 
@@ -146,11 +152,24 @@ serve(async (req) => {
       chat = newChat;
     }
 
-    // Determine message type and content
+    // Determine message type, content, and media URLs
     let msgType = "text";
     let textContent = "";
+    let mediaUrl: string | null = null;
+    let mediaThumbnailUrl: string | null = null;
     
     const msgData = webhookData.messageData;
+    
+    // Helper to extract media data from different message types
+    const getMediaData = (): FileMessageData | null => {
+      if (msgData.imageMessage) return msgData.imageMessage;
+      if (msgData.videoMessage) return msgData.videoMessage;
+      if (msgData.audioMessage) return msgData.audioMessage;
+      if (msgData.documentMessage) return msgData.documentMessage;
+      if (msgData.fileMessageData) return msgData.fileMessageData;
+      return null;
+    };
+
     if (msgData.textMessageData) {
       textContent = msgData.textMessageData.textMessage;
     } else if (msgData.extendedTextMessageData) {
@@ -158,16 +177,30 @@ serve(async (req) => {
     } else if (msgData.imageMessage) {
       msgType = "image";
       textContent = msgData.imageMessage.caption || "";
+      mediaUrl = msgData.imageMessage.downloadUrl || null;
+      mediaThumbnailUrl = msgData.imageMessage.jpegThumbnail 
+        ? `data:image/jpeg;base64,${msgData.imageMessage.jpegThumbnail}` 
+        : null;
+    } else if (msgData.videoMessage) {
+      msgType = "video";
+      textContent = msgData.videoMessage.caption || "";
+      mediaUrl = msgData.videoMessage.downloadUrl || null;
+      mediaThumbnailUrl = msgData.videoMessage.jpegThumbnail 
+        ? `data:image/jpeg;base64,${msgData.videoMessage.jpegThumbnail}` 
+        : null;
     } else if (msgData.audioMessage) {
       msgType = "audio";
-    } else if (msgData.typeMessage === "videoMessage") {
-      msgType = "video";
-    } else if (msgData.typeMessage === "documentMessage") {
+      mediaUrl = msgData.audioMessage.downloadUrl || null;
+    } else if (msgData.documentMessage) {
       msgType = "file";
+      textContent = msgData.documentMessage.fileName || "";
+      mediaUrl = msgData.documentMessage.downloadUrl || null;
     }
 
-    // Insert message
-    const { error: msgError } = await supabase.from("messages").insert({
+    console.log(`Message type: ${msgType}, has media URL: ${!!mediaUrl}, has thumbnail: ${!!mediaThumbnailUrl}`);
+
+    // Insert message with media URLs
+    const { data: insertedMessage, error: msgError } = await supabase.from("messages").insert({
       child_id: childId,
       chat_id: chat.id,
       sender_label: webhookData.senderData.senderName || webhookData.senderData.sender,
@@ -176,7 +209,9 @@ serve(async (req) => {
       message_timestamp: new Date(webhookData.timestamp * 1000).toISOString(),
       text_content: textContent,
       text_excerpt: textContent.substring(0, 100),
-    });
+      media_url: mediaUrl,
+      media_thumbnail_url: mediaThumbnailUrl,
+    }).select('id').single();
 
     if (msgError) {
       console.error("Error inserting message:", msgError);

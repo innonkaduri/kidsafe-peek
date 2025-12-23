@@ -14,6 +14,8 @@ interface Message {
   message_timestamp: string;
   text_content: string | null;
   chat_name?: string;
+  media_url?: string | null;
+  media_thumbnail_url?: string | null;
 }
 
 interface AnalysisRequest {
@@ -21,6 +23,14 @@ interface AnalysisRequest {
   scan_id: string;
   messages: Message[];
   lookback_window: string;
+}
+
+interface MediaAnalysisResult {
+  description: string;
+  detected_text: string | null;
+  risk_indicators: string[];
+  risk_level: string;
+  confidence: number;
 }
 
 const ASSISTANT_ID = "asst_epnwyX2RqHBRjbDdN4YQIYPs";
@@ -59,16 +69,80 @@ serve(async (req) => {
     const limitedMessages = messages.slice(-50);
     console.log(`Limited to ${limitedMessages.length} messages (from ${messages.length})`);
 
-    // Format messages for analysis - truncate long content
-    const formattedMessages = limitedMessages.map((msg) => ({
-      id: msg.id,
-      sender: msg.sender_label,
-      isChild: msg.is_child_sender,
-      type: msg.msg_type,
-      time: msg.message_timestamp,
-      content: (msg.text_content || "[מדיה]").slice(0, 300), // Limit content to 300 chars
-      chat: msg.chat_name || "שיחה",
-    }));
+    // Analyze media messages with GPT Vision
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+    const mediaAnalysisResults: Map<string, MediaAnalysisResult> = new Map();
+    
+    const mediaMessages = limitedMessages.filter(
+      (msg) => msg.media_url && ["image"].includes(msg.msg_type)
+    );
+    
+    console.log(`Found ${mediaMessages.length} media messages to analyze`);
+    
+    // Analyze media in parallel (up to 5 at a time)
+    if (mediaMessages.length > 0 && SUPABASE_URL) {
+      const analyzeMedia = async (msg: Message): Promise<void> => {
+        try {
+          const response = await fetch(`${SUPABASE_URL}/functions/v1/analyze-media`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+            },
+            body: JSON.stringify({
+              media_url: msg.media_url,
+              media_type: msg.msg_type,
+            }),
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            mediaAnalysisResults.set(msg.id, result);
+            console.log(`Media analysis for ${msg.id}: ${result.risk_level}`);
+          }
+        } catch (error) {
+          console.error(`Failed to analyze media ${msg.id}:`, error);
+        }
+      };
+      
+      // Process in batches of 5
+      for (let i = 0; i < mediaMessages.length; i += 5) {
+        const batch = mediaMessages.slice(i, i + 5);
+        await Promise.all(batch.map(analyzeMedia));
+      }
+    }
+
+    // Format messages for analysis - include media analysis results
+    const formattedMessages = limitedMessages.map((msg) => {
+      const mediaAnalysis = mediaAnalysisResults.get(msg.id);
+      let content = msg.text_content || "";
+      
+      if (mediaAnalysis) {
+        content = `[תמונה: ${mediaAnalysis.description}]`;
+        if (mediaAnalysis.detected_text) {
+          content += ` טקסט בתמונה: "${mediaAnalysis.detected_text}"`;
+        }
+        if (mediaAnalysis.risk_indicators && mediaAnalysis.risk_indicators.length > 0) {
+          content += ` [סימני סיכון: ${mediaAnalysis.risk_indicators.join(", ")}]`;
+        }
+        if (msg.text_content) {
+          content += ` כיתוב: ${msg.text_content}`;
+        }
+      } else if (msg.msg_type !== "text" && !content) {
+        content = `[${msg.msg_type === "audio" ? "הודעה קולית" : msg.msg_type === "video" ? "וידאו" : "מדיה"}]`;
+      }
+      
+      return {
+        id: msg.id,
+        sender: msg.sender_label,
+        isChild: msg.is_child_sender,
+        type: msg.msg_type,
+        time: msg.message_timestamp,
+        content: content.slice(0, 500), // Allow more content for media descriptions
+        chat: msg.chat_name || "שיחה",
+        mediaRiskLevel: mediaAnalysis?.risk_level || null,
+      };
+    });
 
     const lookbackLabel = lookback_window === "24h" ? "24 שעות אחרונות" : 
                           lookback_window === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים";
