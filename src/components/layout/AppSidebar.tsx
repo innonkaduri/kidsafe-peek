@@ -38,7 +38,7 @@ export function AppSidebar() {
   const { setOpen } = useSidebar();
 
   return (
-    <Sidebar side="right" collapsible="offcanvas" className="border-l border-sidebar-border bg-sidebar">
+    <Sidebar side="right" collapsible="offcanvas" className="border-l border-sidebar-border bg-sidebar w-72 max-w-[280px]">
       {/* Logo Header */}
       <div className="p-5 border-b border-sidebar-border">
         <div className="flex items-center gap-3 justify-between">
