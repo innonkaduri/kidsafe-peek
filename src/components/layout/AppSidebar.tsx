@@ -1,4 +1,13 @@
-import { Home, Users, Bell, MessageCircle, GraduationCap, Settings, Shield, Sparkles } from "lucide-react";
+import { 
+  Home, 
+  Users, 
+  Bell, 
+  FileBarChart, 
+  Radio, 
+  Settings, 
+  Shield, 
+  Sparkles 
+} from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
@@ -13,11 +22,11 @@ import {
 } from "@/components/ui/sidebar";
 
 const menuItems = [
-  { title: "ראשי", url: "/", icon: Home },
+  { title: "דשבורד", url: "/", icon: Home },
   { title: "הילדים שלי", url: "/my-children", icon: Users },
   { title: "התראות", url: "/alerts", icon: Bell },
-  { title: "פורום הורים", url: "/forum", icon: MessageCircle },
-  { title: "דשבורד מורים", url: "/teachers", icon: GraduationCap },
+  { title: "דוחות חכמים", url: "/forum", icon: FileBarChart },
+  { title: "אירועים בזמן אמת", url: "/teachers", icon: Radio },
   { title: "הגדרות", url: "/settings", icon: Settings },
 ];
 
@@ -31,31 +40,33 @@ export function AppSidebar() {
         <div className="flex items-center gap-3 justify-end">
           <div className="text-right">
             <h2 className="font-bold text-lg text-primary">SafeKids</h2>
-            <p className="text-xs text-muted-foreground">Guardian</p>
+            <p className="text-xs text-sidebar-foreground/60">Guardian</p>
           </div>
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center border border-primary/30">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary/25 to-primary/10 flex items-center justify-center border border-primary/25 shadow-[0_0_20px_hsl(200_100%_55%/0.2)]">
             <Shield className="h-6 w-6 text-primary icon-glow" />
           </div>
         </div>
       </div>
 
       {/* Menu Items */}
-      <SidebarContent className="py-4 px-3">
+      <SidebarContent className="py-5 px-3">
         <SidebarGroup>
           <SidebarGroupContent>
-            <SidebarMenu className="space-y-1">
+            <SidebarMenu className="space-y-1.5">
               {menuItems.map((item) => {
                 const isActive = location.pathname === item.url;
+                const isRealtime = item.title === "אירועים בזמן אמת";
+                
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild className="p-0">
                       <NavLink
                         to={item.url}
                         className={cn(
-                          "flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 justify-end w-full",
+                          "flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all duration-200 justify-end w-full",
                           isActive
-                            ? "sidebar-active text-white font-medium"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                            ? "sidebar-active text-white font-semibold"
+                            : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                         )}
                       >
                         <span className={cn(
@@ -64,10 +75,15 @@ export function AppSidebar() {
                         )}>
                           {item.title}
                         </span>
-                        <item.icon className={cn(
-                          "h-5 w-5",
-                          isActive && "icon-glow"
-                        )} />
+                        <div className="relative">
+                          <item.icon className={cn(
+                            "h-5 w-5",
+                            isActive && "icon-glow"
+                          )} />
+                          {isRealtime && (
+                            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_hsl(0_80%_55%)]" />
+                          )}
+                        </div>
                       </NavLink>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -81,11 +97,8 @@ export function AppSidebar() {
       {/* Footer */}
       <SidebarFooter className="p-4 border-t border-sidebar-border">
         <div className="flex items-center gap-3 justify-center">
-          <div className="text-center">
-            <p className="text-primary font-semibold text-sm">SafeKids Guardian</p>
-            <p className="text-xs text-muted-foreground">הגנה חכמה על ילדים</p>
-          </div>
-          <Sparkles className="h-5 w-5 text-primary/60" />
+          <Sparkles className="h-4 w-4 text-primary/50" />
+          <p className="text-primary/80 font-medium text-sm">SafeKids Guardian</p>
         </div>
       </SidebarFooter>
     </Sidebar>

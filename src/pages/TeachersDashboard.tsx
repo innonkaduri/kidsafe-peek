@@ -221,7 +221,7 @@ export default function TeachersDashboard() {
     return (
       <MainLayout>
         <div className="flex items-center justify-center h-64">
-          <Shield className="h-12 w-12 text-primary animate-pulse" />
+          <Shield className="h-12 w-12 text-primary animate-pulse icon-glow" />
         </div>
       </MainLayout>
     );
@@ -230,125 +230,93 @@ export default function TeachersDashboard() {
   return (
     <MainLayout>
       <div className="space-y-6" dir="rtl">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="text-right">
-            <h1 className="text-2xl font-bold text-foreground">דשבורד גורם חינוכי</h1>
-            <p className="text-muted-foreground">התראות שהורים שיתפו איתך</p>
-          </div>
-          <div className="bg-gradient-to-br from-primary/20 to-purple-500/20 w-16 h-16 rounded-2xl flex items-center justify-center">
-            <Shield className="h-8 w-8 text-primary" />
-          </div>
-        </div>
-
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           {/* Resolved */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-emerald-100 p-3 rounded-xl">
-              <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14 !bg-gradient-to-br !from-success/20 !to-success/10 !border-success/25">
+              <CheckCircle2 className="h-7 w-7 text-success icon-glow-success" />
             </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{resolvedAlerts}</p>
-              <p className="text-sm text-gray-500">טופלו</p>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{resolvedAlerts}</p>
+              <p className="text-sm text-muted-foreground">טופלו</p>
             </div>
           </div>
 
           {/* Pending */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-amber-100 p-3 rounded-xl">
-              <Clock className="h-6 w-6 text-amber-600" />
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14 !bg-gradient-to-br !from-warning/20 !to-warning/10 !border-warning/25">
+              <Clock className="h-7 w-7 text-warning" style={{ filter: 'drop-shadow(0 0 8px hsl(45 93% 47% / 0.5))' }} />
             </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{pendingAlerts}</p>
-              <p className="text-sm text-gray-500">ממתינות לטיפול</p>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{pendingAlerts}</p>
+              <p className="text-sm text-muted-foreground">ממתינות לטיפול</p>
             </div>
           </div>
 
           {/* Total */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-sky-100 p-3 rounded-xl">
-              <AlertTriangle className="h-6 w-6 text-sky-600" />
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14">
+              <AlertTriangle className="h-7 w-7 text-primary icon-glow" />
             </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{totalAlerts}</p>
-              <p className="text-sm text-gray-500">סך הכל התראות</p>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{totalAlerts}</p>
+              <p className="text-sm text-muted-foreground">סך הכל התראות</p>
             </div>
           </div>
         </div>
 
         {/* Filters */}
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
-                  <SelectValue placeholder="כל הסוגים" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">כל הסוגים</SelectItem>
-                  <SelectItem value="bullying">בריונות</SelectItem>
-                  <SelectItem value="harassment">הטרדה</SelectItem>
-                  <SelectItem value="threat">איום</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[180px] bg-background/50 border-border/50">
-                  <div className="flex items-center gap-2">
-                    {statusFilter === "pending" && <span className="w-2 h-2 rounded-full bg-destructive" />}
-                    {statusFilter === "responded" && <span className="w-2 h-2 rounded-full bg-success" />}
-                    <SelectValue placeholder="ממתינות לטיפול" />
-                  </div>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">כל הסטטוסים</SelectItem>
-                  <SelectItem value="pending">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-destructive" />
-                      ממתינות לטיפול
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="responded">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-success" />
-                      נענו
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-
-              <div className="relative">
-                <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="חפש לפי שם תלמיד או הורה..."
-                  className="pr-10 w-[250px] bg-background/50 border-border/50"
-                />
-              </div>
+        <div className="filter-bar flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap flex-1">
+            <div className="relative flex-1 max-w-xs">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="חפש לפי שם תלמיד או הורה..."
+                className="cyber-input pr-10 w-full"
+              />
             </div>
 
-            <div className="text-sm text-muted-foreground">
-              מציג {filteredAlerts.length} מתוך {totalAlerts} התראות
-            </div>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[160px] bg-background/30 border-primary/15 text-foreground">
+                <div className="flex items-center gap-2">
+                  {statusFilter === "pending" && <span className="w-2 h-2 rounded-full bg-warning shadow-[0_0_6px_hsl(45_93%_47%)]" />}
+                  {statusFilter === "responded" && <span className="w-2 h-2 rounded-full bg-success shadow-[0_0_6px_hsl(142_76%_40%)]" />}
+                  <SelectValue placeholder="ממתינות לטיפול" />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">כל הסטטוסים</SelectItem>
+                <SelectItem value="pending">ממתינות לטיפול</SelectItem>
+                <SelectItem value="responded">נענו</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-        </Card>
+
+          <div className="text-sm text-muted-foreground">
+            מציג {filteredAlerts.length} מתוך {totalAlerts} התראות
+          </div>
+        </div>
 
         {/* Alerts List or Empty State */}
         {filteredAlerts.length === 0 ? (
-          <Card className="glass-card p-12 text-center">
-            <Shield className="h-20 w-20 mx-auto text-primary/40 mb-6" />
-            <h2 className="text-xl font-bold text-foreground mb-2">אין התראות להצגה</h2>
-            <p className="text-muted-foreground mb-6">כל ההתראות טופלו - כל הכבוד!</p>
-            <Dialog open={showNewAlert} onOpenChange={setShowNewAlert}>
-              <DialogTrigger asChild>
-                <Button className="bg-primary hover:bg-primary/90">
-                  <Plus className="h-4 w-4 ml-2" />
-                  דווח למורה
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-md">
+          <Card className="glass-card-glow">
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <Shield className="h-12 w-12 text-primary icon-glow" />
+              </div>
+              <h2 className="text-xl font-bold text-foreground mb-2">אין התראות להצגה</h2>
+              <p className="text-muted-foreground mb-8 max-w-sm">כל ההתראות טופלו – כל הכבוד!</p>
+              <Dialog open={showNewAlert} onOpenChange={setShowNewAlert}>
+                <DialogTrigger asChild>
+                  <Button className="btn-glow text-white px-8 py-3 rounded-full text-base">
+                    <Plus className="h-5 w-5 ml-2" />
+                    דווח למורה
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
                 <DialogHeader>
                   <DialogTitle className="text-right">דיווח למורה / גורם חינוכי</DialogTitle>
                 </DialogHeader>
@@ -432,9 +400,12 @@ export default function TeachersDashboard() {
             </Dialog>
           </Card>
         ) : (
+            </div>
+          </Card>
+        ) : (
           <div className="space-y-4">
             {filteredAlerts.map((alert) => (
-              <Card key={alert.id} className="glass-card p-4 hover:border-primary/50 transition-all">
+              <Card key={alert.id} className="glass-card p-5 hover:border-primary/30 transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div className="flex flex-col gap-2">
                     {alert.status === "pending" ? (

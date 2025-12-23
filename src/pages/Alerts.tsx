@@ -5,6 +5,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { 
   Shield, 
   AlertTriangle, 
@@ -12,8 +13,8 @@ import {
   User, 
   CheckCircle2, 
   Eye,
-  Filter,
-  Bell,
+  Search,
+  Plus,
   ChevronDown
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -49,9 +50,10 @@ export default function Alerts() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [children, setChildren] = useState<Child[]>([]);
   const [loadingData, setLoadingData] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [childFilter, setChildFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!loading && !user) {
@@ -112,10 +114,10 @@ export default function Alerts() {
 
   const getRiskColor = (level: string) => {
     switch (level) {
-      case "critical": return "bg-destructive text-destructive-foreground";
-      case "high": return "bg-risk-high text-white";
-      case "medium": return "bg-warning text-warning-foreground";
-      default: return "bg-muted text-muted-foreground";
+      case "critical": return "badge-risk-critical text-white";
+      case "high": return "badge-risk-high text-white";
+      case "medium": return "badge-risk-medium text-white";
+      default: return "badge-risk-low text-white";
     }
   };
 
@@ -132,18 +134,19 @@ export default function Alerts() {
     if (statusFilter === "open" && a.status !== "open") return false;
     if (statusFilter === "resolved" && a.status !== "resolved") return false;
     if (childFilter !== "all" && a.child_id !== childFilter) return false;
+    if (searchQuery && !a.child_name.includes(searchQuery) && !a.explanation.includes(searchQuery)) return false;
     return true;
   });
 
-  const openCount = alerts.filter(a => a.status === "open").length;
-  const highRiskCount = alerts.filter(a => a.risk_level === "high" || a.risk_level === "critical").length;
-  const resolvedCount = alerts.filter(a => a.status === "resolved").length;
+  const totalAlerts = alerts.length;
+  const inProgressCount = alerts.filter(a => a.status === "in_progress").length;
+  const eventsCount = alerts.filter(a => a.risk_level === "high" || a.risk_level === "critical").length;
 
   if (loading || loadingData) {
     return (
       <MainLayout>
         <div className="flex items-center justify-center h-64">
-          <Shield className="h-12 w-12 text-primary animate-pulse" />
+          <Shield className="h-12 w-12 text-primary animate-pulse icon-glow" />
         </div>
       </MainLayout>
     );
@@ -152,116 +155,105 @@ export default function Alerts() {
   return (
     <MainLayout>
       <div className="space-y-6" dir="rtl">
-        {/* Header */}
-        <div className="text-right">
-          <h1 className="text-2xl font-bold text-foreground">התראות</h1>
-          <p className="text-muted-foreground">כל ההתראות שזוהו במערכת</p>
-        </div>
-
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Open Alerts */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-amber-100 p-3 rounded-xl">
-              <Bell className="h-6 w-6 text-amber-600" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* Total Alerts */}
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14">
+              <AlertTriangle className="h-7 w-7 text-primary icon-glow" />
             </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{openCount}</p>
-              <p className="text-sm text-gray-500">פתוחות</p>
-            </div>
-          </div>
-
-          {/* High Risk */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-red-100 p-3 rounded-xl">
-              <AlertTriangle className="h-6 w-6 text-red-500" />
-            </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{highRiskCount}</p>
-              <p className="text-sm text-gray-500">סיכון גבוה</p>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{totalAlerts}</p>
+              <p className="text-sm text-muted-foreground">סך כל ההתראות</p>
             </div>
           </div>
 
-          {/* Resolved */}
-          <div className="stat-card flex items-center justify-between">
-            <div className="bg-emerald-100 p-3 rounded-xl">
-              <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+          {/* In Progress */}
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14 !bg-gradient-to-br !from-warning/20 !to-warning/10 !border-warning/25">
+              <Clock className="h-7 w-7 text-warning" style={{ filter: 'drop-shadow(0 0 8px hsl(45 93% 47% / 0.5))' }} />
             </div>
-            <div className="text-right">
-              <p className="text-3xl font-bold text-gray-800">{resolvedCount}</p>
-              <p className="text-sm text-gray-500">טופלו</p>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{inProgressCount}</p>
+              <p className="text-sm text-muted-foreground">התראות בטיפול</p>
+            </div>
+          </div>
+
+          {/* Events */}
+          <div className="stat-card flex items-center gap-4">
+            <div className="icon-container w-14 h-14 !bg-gradient-to-br !from-success/20 !to-success/10 !border-success/25">
+              <Shield className="h-7 w-7 text-success icon-glow-success" />
+            </div>
+            <div className="text-right flex-1">
+              <p className="text-4xl font-bold text-foreground">{eventsCount}</p>
+              <p className="text-sm text-muted-foreground">אירועים</p>
             </div>
           </div>
         </div>
 
-        {/* Filters */}
-        <Card className="glass-card p-4">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <Select value={childFilter} onValueChange={setChildFilter}>
-                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
-                  <SelectValue placeholder="כל הילדים" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">כל הילדים</SelectItem>
-                  {children.map(child => (
-                    <SelectItem key={child.id} value={child.id}>
-                      {child.display_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
-                  <SelectValue placeholder="כל הסוגים" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">כל הסוגים</SelectItem>
-                  <SelectItem value="bullying">בריונות</SelectItem>
-                  <SelectItem value="predator">איום מבוגר</SelectItem>
-                  <SelectItem value="self_harm">פגיעה עצמית</SelectItem>
-                  <SelectItem value="inappropriate">תוכן לא הולם</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
-                  <SelectValue placeholder="פתוחות" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">הכל</SelectItem>
-                  <SelectItem value="open">פתוחות</SelectItem>
-                  <SelectItem value="resolved">טופלו</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <span>סינון</span>
-              <Filter className="h-5 w-5" />
+        {/* Filter Bar */}
+        <div className="filter-bar flex-wrap">
+          <div className="flex items-center gap-3 flex-1">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="חפש לפי שם הילד או מזהה..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="cyber-input pr-10 w-full"
+              />
             </div>
           </div>
-        </Card>
+
+          <div className="flex items-center gap-3">
+            {/* Realtime indicator */}
+            <div className="monitoring-indicator">
+              האזנה בזמן אמת
+            </div>
+
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-[140px] bg-background/30 border-primary/15 text-foreground">
+                <SelectValue placeholder="סוג אירוע" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">כל הסוגים</SelectItem>
+                <SelectItem value="bullying">בריונות</SelectItem>
+                <SelectItem value="predator">איום מבוגר</SelectItem>
+                <SelectItem value="self_harm">פגיעה עצמית</SelectItem>
+                <SelectItem value="inappropriate">תוכן לא הולם</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
 
         {/* Alerts List or Empty State */}
         {filteredAlerts.length === 0 ? (
-          <Card className="glass-card p-12 text-center">
-            <Shield className="h-20 w-20 mx-auto text-success/60 mb-6" />
-            <h2 className="text-xl font-bold text-foreground mb-2">אין התראות פתוחות</h2>
-            <p className="text-muted-foreground">כל ההתראות טופלו או שאין התראות חדשות</p>
+          <Card className="glass-card-glow">
+            <div className="empty-state">
+              <div className="empty-state-icon">
+                <Shield className="h-12 w-12 text-primary icon-glow" />
+              </div>
+              <h2 className="text-xl font-bold text-foreground mb-2">אין התראות להצגה</h2>
+              <p className="text-muted-foreground mb-8 max-w-sm">
+                כל המערכות תקינות – כל הכבוד!
+              </p>
+              <Button className="btn-glow text-white px-8 py-3 rounded-full text-base">
+                <Plus className="h-5 w-5 ml-2" />
+                דווח חריגה
+              </Button>
+            </div>
           </Card>
         ) : (
           <div className="space-y-4">
             {filteredAlerts.map((alert) => (
-              <Card key={alert.id} className="glass-card p-4 hover:border-primary/50 transition-all">
+              <Card key={alert.id} className="glass-card p-5 hover:border-primary/30 transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm">
+                    <Button variant="outline" size="sm" className="border-primary/20 text-primary hover:bg-primary/10">
                       <Eye className="h-4 w-4 ml-1" />
                       צפה
                     </Button>
-                    <Button variant="outline" size="sm" className="text-success border-success/50 hover:bg-success/10">
+                    <Button variant="outline" size="sm" className="text-success border-success/30 hover:bg-success/10">
                       <CheckCircle2 className="h-4 w-4 ml-1" />
                       טופל
                     </Button>
@@ -272,15 +264,17 @@ export default function Alerts() {
                       <Badge className={getRiskColor(alert.risk_level)}>
                         {getRiskLabel(alert.risk_level)}
                       </Badge>
-                      <h3 className="font-bold">
+                      <h3 className="font-bold text-foreground">
                         {alert.threat_types.length > 0 
                           ? alert.threat_types.join(", ")
                           : "התראת אבטחה"}
                       </h3>
-                      <AlertTriangle className={`h-5 w-5 ${
-                        alert.risk_level === "critical" ? "text-destructive" :
-                        alert.risk_level === "high" ? "text-warning" : "text-muted-foreground"
-                      }`} />
+                      <div className="w-8 h-8 rounded-lg icon-container flex items-center justify-center">
+                        <AlertTriangle className={`h-4 w-4 ${
+                          alert.risk_level === "critical" ? "text-destructive" :
+                          alert.risk_level === "high" ? "text-warning" : "text-primary"
+                        }`} />
+                      </div>
                     </div>
 
                     <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
