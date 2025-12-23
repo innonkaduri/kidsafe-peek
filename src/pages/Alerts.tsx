@@ -5,10 +5,27 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Shield, AlertTriangle, Clock, User, CheckCircle2, XCircle, Eye } from "lucide-react";
+import { 
+  Shield, 
+  AlertTriangle, 
+  Clock, 
+  User, 
+  CheckCircle2, 
+  Eye,
+  Filter,
+  Bell,
+  ChevronDown
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { formatDistanceToNow } from "date-fns";
 import { he } from "date-fns/locale";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface Alert {
   id: string;
@@ -21,12 +38,20 @@ interface Alert {
   status: "open" | "in_progress" | "resolved";
 }
 
+interface Child {
+  id: string;
+  display_name: string;
+}
+
 export default function Alerts() {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [children, setChildren] = useState<Child[]>([]);
   const [loadingData, setLoadingData] = useState(true);
-  const [filter, setFilter] = useState<"all" | "open" | "resolved">("all");
+  const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [childFilter, setChildFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
 
   useEffect(() => {
     if (!loading && !user) {
@@ -43,24 +68,26 @@ export default function Alerts() {
   const fetchAlerts = async () => {
     setLoadingData(true);
     try {
-      const { data: children } = await supabase
+      const { data: childrenData } = await supabase
         .from("children")
         .select("id, display_name")
         .eq("user_id", user?.id);
 
-      if (!children || children.length === 0) {
+      if (!childrenData || childrenData.length === 0) {
         setAlerts([]);
+        setChildren([]);
         setLoadingData(false);
         return;
       }
 
-      const childMap = new Map(children.map(c => [c.id, c.display_name]));
+      setChildren(childrenData);
+      const childMap = new Map(childrenData.map(c => [c.id, c.display_name]));
 
       const { data: findings } = await supabase
         .from("findings")
         .select("*")
         .eq("threat_detected", true)
-        .in("child_id", children.map(c => c.id))
+        .in("child_id", childrenData.map(c => c.id))
         .order("created_at", { ascending: false });
 
       if (findings) {
@@ -102,11 +129,15 @@ export default function Alerts() {
   };
 
   const filteredAlerts = alerts.filter(a => {
-    if (filter === "all") return true;
-    if (filter === "open") return a.status === "open";
-    if (filter === "resolved") return a.status === "resolved";
+    if (statusFilter === "open" && a.status !== "open") return false;
+    if (statusFilter === "resolved" && a.status !== "resolved") return false;
+    if (childFilter !== "all" && a.child_id !== childFilter) return false;
     return true;
   });
+
+  const openCount = alerts.filter(a => a.status === "open").length;
+  const highRiskCount = alerts.filter(a => a.risk_level === "high" || a.risk_level === "critical").length;
+  const resolvedCount = alerts.filter(a => a.status === "resolved").length;
 
   if (loading || loadingData) {
     return (
@@ -120,39 +151,105 @@ export default function Alerts() {
 
   return (
     <MainLayout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2">
-            <Button
-              variant={filter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilter("all")}
-            >
-              הכל ({alerts.length})
-            </Button>
-            <Button
-              variant={filter === "open" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilter("open")}
-            >
-              פתוחות
-            </Button>
-            <Button
-              variant={filter === "resolved" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilter("resolved")}
-            >
-              טופלו
-            </Button>
-          </div>
-          <h1 className="text-2xl font-bold">התראות</h1>
+      <div className="space-y-6" dir="rtl">
+        {/* Header */}
+        <div className="text-right">
+          <h1 className="text-2xl font-bold text-foreground">התראות</h1>
+          <p className="text-muted-foreground">כל ההתראות שזוהו במערכת</p>
         </div>
 
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Open Alerts */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-primary/20 p-3 rounded-full">
+              <Bell className="h-6 w-6 text-primary" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{openCount}</p>
+              <p className="text-sm text-muted-foreground">פתוחות</p>
+            </div>
+          </Card>
+
+          {/* High Risk */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-warning/20 p-3 rounded-full">
+              <AlertTriangle className="h-6 w-6 text-warning" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{highRiskCount}</p>
+              <p className="text-sm text-muted-foreground">סיכון גבוה</p>
+            </div>
+          </Card>
+
+          {/* Resolved */}
+          <Card className="glass-card p-4 flex items-center justify-between">
+            <div className="bg-success/20 p-3 rounded-full">
+              <CheckCircle2 className="h-6 w-6 text-success" />
+            </div>
+            <div className="text-right">
+              <p className="text-3xl font-bold text-foreground">{resolvedCount}</p>
+              <p className="text-sm text-muted-foreground">טופלו</p>
+            </div>
+          </Card>
+        </div>
+
+        {/* Filters */}
+        <Card className="glass-card p-4">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <Select value={childFilter} onValueChange={setChildFilter}>
+                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
+                  <SelectValue placeholder="כל הילדים" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">כל הילדים</SelectItem>
+                  {children.map(child => (
+                    <SelectItem key={child.id} value={child.id}>
+                      {child.display_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
+                  <SelectValue placeholder="כל הסוגים" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">כל הסוגים</SelectItem>
+                  <SelectItem value="bullying">בריונות</SelectItem>
+                  <SelectItem value="predator">איום מבוגר</SelectItem>
+                  <SelectItem value="self_harm">פגיעה עצמית</SelectItem>
+                  <SelectItem value="inappropriate">תוכן לא הולם</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[150px] bg-background/50 border-border/50">
+                  <SelectValue placeholder="פתוחות" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">הכל</SelectItem>
+                  <SelectItem value="open">פתוחות</SelectItem>
+                  <SelectItem value="resolved">טופלו</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <span>סינון</span>
+              <Filter className="h-5 w-5" />
+            </div>
+          </div>
+        </Card>
+
+        {/* Alerts List or Empty State */}
         {filteredAlerts.length === 0 ? (
-          <Card className="glass-card p-12 text-center bg-success/10 border-success/30">
-            <Shield className="h-16 w-16 mx-auto text-success mb-6" />
-            <h2 className="text-xl font-bold text-success mb-2">הכל תקין!</h2>
-            <p className="text-muted-foreground">אין התראות פתוחות כרגע</p>
+          <Card className="glass-card p-12 text-center">
+            <Shield className="h-20 w-20 mx-auto text-success/60 mb-6" />
+            <h2 className="text-xl font-bold text-foreground mb-2">אין התראות פתוחות</h2>
+            <p className="text-muted-foreground">כל ההתראות טופלו או שאין התראות חדשות</p>
           </Card>
         ) : (
           <div className="space-y-4">
@@ -164,7 +261,7 @@ export default function Alerts() {
                       <Eye className="h-4 w-4 ml-1" />
                       צפה
                     </Button>
-                    <Button variant="outline" size="sm" className="text-success border-success/50">
+                    <Button variant="outline" size="sm" className="text-success border-success/50 hover:bg-success/10">
                       <CheckCircle2 className="h-4 w-4 ml-1" />
                       טופל
                     </Button>
@@ -182,7 +279,7 @@ export default function Alerts() {
                       </h3>
                       <AlertTriangle className={`h-5 w-5 ${
                         alert.risk_level === "critical" ? "text-destructive" :
-                        alert.risk_level === "high" ? "text-orange-500" : "text-warning"
+                        alert.risk_level === "high" ? "text-warning" : "text-muted-foreground"
                       }`} />
                     </div>
 
