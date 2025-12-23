@@ -7,4 +7,4 @@ verify_jwt = true
 verify_jwt = false
 
 [functions.green-api-fetch]
-verify_jwt = true
+verify_jwt = false
