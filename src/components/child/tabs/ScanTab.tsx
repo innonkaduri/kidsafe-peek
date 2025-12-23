@@ -36,6 +36,8 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     userPrompt: string;
     messagesCount: number;
     limitedCount: number;
+    newestMessageAt: string | null;
+    oldestMessageAt: string | null;
   } | null>(null);
   const [result, setResult] = useState<{
     threatDetected: boolean;
@@ -47,7 +49,7 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   // Build the prompt (same logic as edge function)
   const buildPrompt = (messages: any[], lookbackWindow: LookbackWindow) => {
     const limitedMessages = messages.slice(-50);
-    
+
     const formattedMessages = limitedMessages.map((msg) => ({
       id: msg.id,
       sender: msg.sender_label,
@@ -58,8 +60,12 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
       chat: msg.chat_name || "שיחה",
     }));
 
-    const lookbackLabel = lookbackWindow === "24h" ? "24 שעות אחרונות" : 
-                          lookbackWindow === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים";
+    const lookbackLabel =
+      lookbackWindow === '24h'
+        ? '24 שעות אחרונות'
+        : lookbackWindow === '7d'
+          ? '7 ימים אחרונים'
+          : '30 ימים אחרונים';
 
     const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
 
@@ -92,10 +98,15 @@ ${JSON.stringify(formattedMessages, null, 2)}
   "explanation": string
 }`;
 
+    const oldestMessageAt = limitedMessages[0]?.message_timestamp ?? null;
+    const newestMessageAt = limitedMessages[limitedMessages.length - 1]?.message_timestamp ?? null;
+
     return {
       userPrompt,
       messagesCount: messages.length,
       limitedCount: limitedMessages.length,
+      newestMessageAt,
+      oldestMessageAt,
     };
   };
 
@@ -391,6 +402,16 @@ ${JSON.stringify(formattedMessages, null, 2)}
                 </p>
                 <p className="text-sm">
                   <strong>נשלחות לניתוח:</strong> {promptPreview.limitedCount} (מוגבל ל-50 אחרונות)
+                </p>
+                <p className="text-sm">
+                  <strong>טווח זמן בפריוויו:</strong>{' '}
+                  {promptPreview.oldestMessageAt
+                    ? new Date(promptPreview.oldestMessageAt).toLocaleString('he-IL')
+                    : '—'}{' '}
+                  →{' '}
+                  {promptPreview.newestMessageAt
+                    ? new Date(promptPreview.newestMessageAt).toLocaleString('he-IL')
+                    : '—'}
                 </p>
               </div>
 

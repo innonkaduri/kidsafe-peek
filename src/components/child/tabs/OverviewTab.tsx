@@ -30,12 +30,15 @@ export function OverviewTab({ child }: OverviewTabProps) {
   const [recentFindings, setRecentFindings] = useState<Finding[]>([]);
   const [chatsCount, setChatsCount] = useState(0);
   const [messagesCount, setMessagesCount] = useState(0);
+  const [lastMessageAt, setLastMessageAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     async function fetchOverviewData() {
       setLoading(true);
-      
+
       // Fetch last scan
       const { data: scanData } = await supabase
         .from('scans')
@@ -44,8 +47,6 @@ export function OverviewTab({ child }: OverviewTabProps) {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
-      
-      setLastScan(scanData);
 
       // Fetch recent findings
       const { data: findingsData } = await supabase
@@ -55,29 +56,62 @@ export function OverviewTab({ child }: OverviewTabProps) {
         .eq('threat_detected', true)
         .order('created_at', { ascending: false })
         .limit(5);
-      
-      setRecentFindings(findingsData || []);
 
       // Fetch chats count
       const { count: chats } = await supabase
         .from('chats')
         .select('*', { count: 'exact', head: true })
         .eq('child_id', child.id);
-      
-      setChatsCount(chats || 0);
 
       // Fetch messages count
       const { count: messages } = await supabase
         .from('messages')
         .select('*', { count: 'exact', head: true })
         .eq('child_id', child.id);
-      
-      setMessagesCount(messages || 0);
 
+      // Fetch last message timestamp
+      const { data: lastMsg } = await supabase
+        .from('messages')
+        .select('message_timestamp')
+        .eq('child_id', child.id)
+        .order('message_timestamp', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!mounted) return;
+
+      setLastScan(scanData);
+      setRecentFindings(findingsData || []);
+      setChatsCount(chats || 0);
+      setMessagesCount(messages || 0);
+      setLastMessageAt(lastMsg?.message_timestamp ?? null);
       setLoading(false);
     }
 
     fetchOverviewData();
+
+    // Realtime: refresh overview when a new message arrives for this child
+    const channel = supabase
+      .channel(`child:${child.id}:messages`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `child_id=eq.${child.id}`,
+        },
+        () => {
+          // refresh counters + last message time + (small) data
+          fetchOverviewData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(channel);
+    };
   }, [child.id]);
 
   const hasThreats = lastScan?.summary_json?.threat_detected;
@@ -140,13 +174,27 @@ export function OverviewTab({ child }: OverviewTabProps) {
               <div className="w-12 h-12 rounded-xl bg-success/20 flex items-center justify-center">
                 <Clock className="w-6 h-6 text-success" />
               </div>
+              {lastMessageAt ? (
+                <Badge variant="secondary">
+                  {new Date(lastMessageAt).toLocaleTimeString('he-IL', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })}
+                </Badge>
+              ) : null}
             </div>
             <h3 className="font-heebo font-bold text-lg mb-1">סריקה אחרונה</h3>
             <p className="text-sm text-muted-foreground">
-              {lastScan ? formatDistanceToNow(new Date(lastScan.created_at), { 
-                addSuffix: true, 
-                locale: he 
-              }) : 'טרם בוצעה'}
+              {lastScan
+                ? formatDistanceToNow(new Date(lastScan.created_at), { addSuffix: true, locale: he })
+                : 'טרם בוצעה'}
+            </p>
+            <p className="text-xs text-muted-foreground mt-2">
+              <span className="font-medium text-foreground/80">הודעה אחרונה:</span>{' '}
+              {lastMessageAt
+                ? formatDistanceToNow(new Date(lastMessageAt), { addSuffix: true, locale: he })
+                : 'טרם נקלטו הודעות'}
             </p>
           </CardContent>
         </Card>
