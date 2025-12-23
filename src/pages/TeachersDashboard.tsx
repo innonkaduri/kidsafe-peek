@@ -244,37 +244,37 @@ export default function TeachersDashboard() {
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Resolved */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-success/20 p-3 rounded-full">
-              <CheckCircle2 className="h-6 w-6 text-success" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-emerald-100 p-3 rounded-xl">
+              <CheckCircle2 className="h-6 w-6 text-emerald-600" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{resolvedAlerts}</p>
-              <p className="text-sm text-muted-foreground">טופלו</p>
+              <p className="text-3xl font-bold text-gray-800">{resolvedAlerts}</p>
+              <p className="text-sm text-gray-500">טופלו</p>
             </div>
-          </Card>
+          </div>
 
           {/* Pending */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-warning/20 p-3 rounded-full">
-              <Clock className="h-6 w-6 text-warning" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-amber-100 p-3 rounded-xl">
+              <Clock className="h-6 w-6 text-amber-600" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{pendingAlerts}</p>
-              <p className="text-sm text-muted-foreground">ממתינות לטיפול</p>
+              <p className="text-3xl font-bold text-gray-800">{pendingAlerts}</p>
+              <p className="text-sm text-gray-500">ממתינות לטיפול</p>
             </div>
-          </Card>
+          </div>
 
           {/* Total */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-primary/20 p-3 rounded-full">
-              <AlertTriangle className="h-6 w-6 text-primary" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-sky-100 p-3 rounded-xl">
+              <AlertTriangle className="h-6 w-6 text-sky-600" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{totalAlerts}</p>
-              <p className="text-sm text-muted-foreground">סך הכל התראות</p>
+              <p className="text-3xl font-bold text-gray-800">{totalAlerts}</p>
+              <p className="text-sm text-gray-500">סך הכל התראות</p>
             </div>
-          </Card>
+          </div>
         </div>
 
         {/* Filters */}

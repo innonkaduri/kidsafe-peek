@@ -161,37 +161,37 @@ export default function Alerts() {
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Open Alerts */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-primary/20 p-3 rounded-full">
-              <Bell className="h-6 w-6 text-primary" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-amber-100 p-3 rounded-xl">
+              <Bell className="h-6 w-6 text-amber-600" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{openCount}</p>
-              <p className="text-sm text-muted-foreground">פתוחות</p>
+              <p className="text-3xl font-bold text-gray-800">{openCount}</p>
+              <p className="text-sm text-gray-500">פתוחות</p>
             </div>
-          </Card>
+          </div>
 
           {/* High Risk */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-warning/20 p-3 rounded-full">
-              <AlertTriangle className="h-6 w-6 text-warning" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-red-100 p-3 rounded-xl">
+              <AlertTriangle className="h-6 w-6 text-red-500" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{highRiskCount}</p>
-              <p className="text-sm text-muted-foreground">סיכון גבוה</p>
+              <p className="text-3xl font-bold text-gray-800">{highRiskCount}</p>
+              <p className="text-sm text-gray-500">סיכון גבוה</p>
             </div>
-          </Card>
+          </div>
 
           {/* Resolved */}
-          <Card className="glass-card p-4 flex items-center justify-between">
-            <div className="bg-success/20 p-3 rounded-full">
-              <CheckCircle2 className="h-6 w-6 text-success" />
+          <div className="stat-card flex items-center justify-between">
+            <div className="bg-emerald-100 p-3 rounded-xl">
+              <CheckCircle2 className="h-6 w-6 text-emerald-600" />
             </div>
             <div className="text-right">
-              <p className="text-3xl font-bold text-foreground">{resolvedCount}</p>
-              <p className="text-sm text-muted-foreground">טופלו</p>
+              <p className="text-3xl font-bold text-gray-800">{resolvedCount}</p>
+              <p className="text-sm text-gray-500">טופלו</p>
             </div>
-          </Card>
+          </div>
         </div>
 
         {/* Filters */}
