@@ -12,6 +12,7 @@ import NotFound from "./pages/NotFound";
 import Children from "./pages/Children";
 import Alerts from "./pages/Alerts";
 import TeachersDashboard from "./pages/TeachersDashboard";
+import ParentsForum from "./pages/ParentsForum";
 
 const queryClient = new QueryClient();
 
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/children" element={<Children />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/teachers" element={<TeachersDashboard />} />
+            <Route path="/forum" element={<ParentsForum />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
