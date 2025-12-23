@@ -397,9 +397,7 @@ export default function TeachersDashboard() {
                   </Button>
                 </div>
               </DialogContent>
-            </Dialog>
-          </Card>
-        ) : (
+              </Dialog>
             </div>
           </Card>
         ) : (
