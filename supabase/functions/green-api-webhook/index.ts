@@ -159,42 +159,44 @@ serve(async (req) => {
     let mediaThumbnailUrl: string | null = null;
     
     const msgData = webhookData.messageData;
+    const typeMessage = msgData.typeMessage;
+    const fileData = msgData.fileMessageData;
     
-    // Helper to extract media data from different message types
-    const getMediaData = (): FileMessageData | null => {
-      if (msgData.imageMessage) return msgData.imageMessage;
-      if (msgData.videoMessage) return msgData.videoMessage;
-      if (msgData.audioMessage) return msgData.audioMessage;
-      if (msgData.documentMessage) return msgData.documentMessage;
-      if (msgData.fileMessageData) return msgData.fileMessageData;
-      return null;
-    };
-
-    if (msgData.textMessageData) {
+    console.log(`Processing message - typeMessage: ${typeMessage}, has fileData: ${!!fileData}`);
+    
+    // Use typeMessage to determine the message type (Green API structure)
+    if (typeMessage === 'textMessage' && msgData.textMessageData) {
+      msgType = "text";
       textContent = msgData.textMessageData.textMessage;
-    } else if (msgData.extendedTextMessageData) {
+    } else if (typeMessage === 'extendedTextMessage' && msgData.extendedTextMessageData) {
+      msgType = "text";
       textContent = msgData.extendedTextMessageData.text;
-    } else if (msgData.imageMessage) {
+    } else if (typeMessage === 'imageMessage' && fileData) {
       msgType = "image";
-      textContent = msgData.imageMessage.caption || "";
-      mediaUrl = msgData.imageMessage.downloadUrl || null;
-      mediaThumbnailUrl = msgData.imageMessage.jpegThumbnail 
-        ? `data:image/jpeg;base64,${msgData.imageMessage.jpegThumbnail}` 
+      textContent = fileData.caption || "";
+      mediaUrl = fileData.downloadUrl || null;
+      mediaThumbnailUrl = fileData.jpegThumbnail 
+        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}` 
         : null;
-    } else if (msgData.videoMessage) {
+    } else if (typeMessage === 'videoMessage' && fileData) {
       msgType = "video";
-      textContent = msgData.videoMessage.caption || "";
-      mediaUrl = msgData.videoMessage.downloadUrl || null;
-      mediaThumbnailUrl = msgData.videoMessage.jpegThumbnail 
-        ? `data:image/jpeg;base64,${msgData.videoMessage.jpegThumbnail}` 
+      textContent = fileData.caption || "";
+      mediaUrl = fileData.downloadUrl || null;
+      mediaThumbnailUrl = fileData.jpegThumbnail 
+        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}` 
         : null;
-    } else if (msgData.audioMessage) {
+    } else if (typeMessage === 'audioMessage' && fileData) {
       msgType = "audio";
-      mediaUrl = msgData.audioMessage.downloadUrl || null;
-    } else if (msgData.documentMessage) {
+      mediaUrl = fileData.downloadUrl || null;
+    } else if (typeMessage === 'documentMessage' && fileData) {
       msgType = "file";
-      textContent = msgData.documentMessage.fileName || "";
-      mediaUrl = msgData.documentMessage.downloadUrl || null;
+      textContent = fileData.fileName || "";
+      mediaUrl = fileData.downloadUrl || null;
+    } else if (typeMessage === 'stickerMessage') {
+      msgType = "sticker";
+      if (fileData) {
+        mediaUrl = fileData.downloadUrl || null;
+      }
     }
 
     console.log(`Message type: ${msgType}, has media URL: ${!!mediaUrl}, has thumbnail: ${!!mediaThumbnailUrl}`);

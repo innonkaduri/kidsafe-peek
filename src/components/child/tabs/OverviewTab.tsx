@@ -278,7 +278,17 @@ export function OverviewTab({ child }: OverviewTabProps) {
                       <p className="text-sm text-foreground/90 line-clamp-2">
                         {msg.msg_type === 'text' 
                           ? (msg.text_content || msg.text_excerpt || '[הודעה ריקה]')
-                          : `[${msg.msg_type}]`}
+                          : msg.msg_type === 'image'
+                            ? `📷 ${msg.text_content || 'תמונה'}`
+                            : msg.msg_type === 'video'
+                              ? `🎬 ${msg.text_content || 'וידאו'}`
+                              : msg.msg_type === 'audio'
+                                ? '🎤 הודעה קולית'
+                                : msg.msg_type === 'file'
+                                  ? `📄 ${msg.text_content || 'קובץ'}`
+                                  : msg.msg_type === 'sticker'
+                                    ? '🎨 סטיקר'
+                                    : `[${msg.msg_type}]`}
                       </p>
                       <span className="text-xs text-muted-foreground">
                         {new Date(msg.message_timestamp).toLocaleString('he-IL', {
