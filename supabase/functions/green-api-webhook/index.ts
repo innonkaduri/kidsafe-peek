@@ -159,59 +159,68 @@ serve(async (req) => {
     let textContent = "";
     let mediaUrl: string | null = null;
     let mediaThumbnailUrl: string | null = null;
-    
+
     const msgData = webhookData.messageData;
-    const typeMessage = msgData.typeMessage;
-    const fileData = msgData.fileMessageData;
-    
-    // Use typeMessage to determine the message type (Green API structure)
-    if (typeMessage === 'textMessage' && msgData.textMessageData) {
+    const typeMessage = msgData?.typeMessage;
+
+    // Green API sends file payloads under the specific *Message field (not consistently under fileMessageData)
+    const getFileData = (): FileMessageData | undefined => {
+      if (typeMessage === "imageMessage") return msgData.imageMessage;
+      if (typeMessage === "videoMessage") return msgData.videoMessage;
+      if (typeMessage === "audioMessage") return msgData.audioMessage;
+      if (typeMessage === "documentMessage") return msgData.documentMessage;
+      return msgData.fileMessageData;
+    };
+
+    const fileData = getFileData();
+
+    if (typeMessage === "textMessage" && msgData.textMessageData) {
       msgType = "text";
       textContent = msgData.textMessageData.textMessage;
-    } else if (typeMessage === 'extendedTextMessage' && msgData.extendedTextMessageData) {
+    } else if (typeMessage === "extendedTextMessage" && msgData.extendedTextMessageData) {
       msgType = "text";
       textContent = msgData.extendedTextMessageData.text;
-    } else if (typeMessage === 'imageMessage' && fileData) {
+    } else if (typeMessage === "imageMessage") {
       msgType = "image";
-      textContent = fileData.caption || "";
-      mediaUrl = fileData.downloadUrl || null;
-      mediaThumbnailUrl = fileData.jpegThumbnail 
-        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}` 
+      textContent = fileData?.caption || "";
+      mediaUrl = fileData?.downloadUrl || null;
+      mediaThumbnailUrl = fileData?.jpegThumbnail
+        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
         : null;
-    } else if (typeMessage === 'videoMessage' && fileData) {
+    } else if (typeMessage === "videoMessage") {
       msgType = "video";
-      textContent = fileData.caption || "";
-      mediaUrl = fileData.downloadUrl || null;
-      mediaThumbnailUrl = fileData.jpegThumbnail 
-        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}` 
+      textContent = fileData?.caption || "";
+      mediaUrl = fileData?.downloadUrl || null;
+      mediaThumbnailUrl = fileData?.jpegThumbnail
+        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
         : null;
-    } else if (typeMessage === 'audioMessage' && fileData) {
+    } else if (typeMessage === "audioMessage") {
       msgType = "audio";
-      mediaUrl = fileData.downloadUrl || null;
-    } else if (typeMessage === 'documentMessage' && fileData) {
+      mediaUrl = fileData?.downloadUrl || null;
+    } else if (typeMessage === "documentMessage") {
       msgType = "file";
-      textContent = fileData.fileName || "";
-      mediaUrl = fileData.downloadUrl || null;
-    } else if (typeMessage === 'stickerMessage') {
+      textContent = fileData?.fileName || fileData?.caption || "";
+      mediaUrl = fileData?.downloadUrl || null;
+    } else if (typeMessage === "stickerMessage") {
       msgType = "sticker";
-      if (fileData) {
-        mediaUrl = fileData.downloadUrl || null;
-      }
+      mediaUrl = fileData?.downloadUrl || null;
     }
 
-    // Insert message with media URLs
-    const { error: msgError } = await supabase.from("messages").insert({
+    const payload = {
       child_id: childId,
       chat_id: chat.id,
       sender_label: webhookData.senderData.senderName || webhookData.senderData.sender,
-      is_child_sender: false, // Incoming messages are not from child
+      is_child_sender: false, // incoming messages are not from the child
       msg_type: msgType,
       message_timestamp: new Date(webhookData.timestamp * 1000).toISOString(),
       text_content: textContent,
-      text_excerpt: textContent.substring(0, 100),
+      text_excerpt: (textContent || "").slice(0, 100),
       media_url: mediaUrl,
       media_thumbnail_url: mediaThumbnailUrl,
-    });
+    };
+
+    // Insert as an array to avoid intermittent "Empty or invalid json" issues seen in PostgREST
+    const { error: msgError } = await supabase.from("messages").insert([payload]);
 
     if (msgError) {
       console.error("Error inserting message:", msgError);
