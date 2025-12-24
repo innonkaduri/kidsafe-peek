@@ -58,13 +58,18 @@ async function verifyAuthAndOwnership(
     );
   }
 
-  // Verify user owns the child
-  const { data: child, error: childError } = await supabaseAuth
+  // Use service role client to verify ownership (bypasses RLS)
+  const supabaseAdmin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  const { data: child, error: childError } = await supabaseAdmin
     .from("children")
     .select("id")
     .eq("id", childId)
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (childError || !child) {
     console.error("Child ownership verification failed:", childError);
