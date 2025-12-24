@@ -21,6 +21,7 @@ export interface Child {
   avatar_url: string | null;
   consent_ack_at: string | null;
   monitoring_enabled: boolean;
+  teacher_email: string | null;
   created_at: string;
   updated_at: string;
 }

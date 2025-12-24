@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, Shield, Trash2, User } from 'lucide-react';
+import { GraduationCap, Shield, Trash2, User } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,7 +38,9 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
   const [displayName, setDisplayName] = useState(child.display_name);
   const [ageRange, setAgeRange] = useState<AgeRange | ''>(child.age_range || '');
   const [monitoringEnabled, setMonitoringEnabled] = useState(child.monitoring_enabled);
+  const [teacherEmail, setTeacherEmail] = useState(child.teacher_email || '');
   const [saving, setSaving] = useState(false);
+  const [savingTeacher, setSavingTeacher] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -61,6 +63,34 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
       toast.error('שגיאה בשמירה: ' + error.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveTeacher = async () => {
+    // Validate email format
+    if (teacherEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(teacherEmail)) {
+      toast.error('כתובת מייל לא תקינה');
+      return;
+    }
+
+    setSavingTeacher(true);
+    
+    try {
+      const { error } = await supabase
+        .from('children')
+        .update({
+          teacher_email: teacherEmail.trim() || null,
+        })
+        .eq('id', child.id);
+
+      if (error) throw error;
+
+      toast.success('מייל המורה נשמר בהצלחה');
+      onUpdate();
+    } catch (error: any) {
+      toast.error('שגיאה בשמירה: ' + error.message);
+    } finally {
+      setSavingTeacher(false);
     }
   };
 
@@ -149,6 +179,39 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
               </p>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <GraduationCap className="w-5 h-5 text-primary" />
+            שיתוף עם מורה
+          </CardTitle>
+          <CardDescription>
+            הזינו את כתובת המייל של המורה/יועץ לקבלת התראות על ממצאים
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="teacherEmail">כתובת מייל של המורה</Label>
+            <Input
+              id="teacherEmail"
+              type="email"
+              placeholder="teacher@school.edu"
+              value={teacherEmail}
+              onChange={(e) => setTeacherEmail(e.target.value)}
+              dir="ltr"
+              className="text-left"
+            />
+            <p className="text-xs text-muted-foreground">
+              כאשר תבחרו לשתף ממצא עם המורה, הוא יישלח לכתובת זו
+            </p>
+          </div>
+
+          <Button onClick={handleSaveTeacher} variant="glow" disabled={savingTeacher}>
+            {savingTeacher ? 'שומר...' : 'שמור מייל מורה'}
+          </Button>
         </CardContent>
       </Card>
 
