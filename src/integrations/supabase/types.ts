@@ -261,6 +261,8 @@ export type Database = {
           child_id: string
           created_at: string | null
           explanation: string | null
+          handled: boolean | null
+          handled_at: string | null
           id: string
           risk_level: string | null
           scan_id: string
@@ -272,6 +274,8 @@ export type Database = {
           child_id: string
           created_at?: string | null
           explanation?: string | null
+          handled?: boolean | null
+          handled_at?: string | null
           id?: string
           risk_level?: string | null
           scan_id: string
@@ -283,6 +287,8 @@ export type Database = {
           child_id?: string
           created_at?: string | null
           explanation?: string | null
+          handled?: boolean | null
+          handled_at?: string | null
           id?: string
           risk_level?: string | null
           scan_id?: string
