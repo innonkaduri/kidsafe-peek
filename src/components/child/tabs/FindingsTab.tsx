@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, MessageSquare, Image, Mic, Calendar, Filter, Eye, CheckCircle } from 'lucide-react';
+import { AlertTriangle, Calendar, Filter, Eye, CheckCircle, Share2, CheckCheck, User, Users, MessageCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,9 +20,17 @@ import { Child, Finding, RiskLevel, ThreatType } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { formatDistanceToNow, format } from 'date-fns';
 import { he } from 'date-fns/locale';
+import { toast } from 'sonner';
 
 interface FindingsTabProps {
   child: Child;
+}
+
+interface FindingWithContext extends Finding {
+  senderName?: string;
+  chatName?: string;
+  isGroup?: boolean;
+  messagePreview?: string;
 }
 
 const riskLabels: Record<RiskLevel, string> = {
@@ -41,14 +49,22 @@ const threatTypeLabels: Record<ThreatType, string> = {
   violence_threats: 'איומים/אלימות',
 };
 
+const riskIcons: Record<string, { bg: string; icon: string }> = {
+  critical: { bg: 'bg-risk-critical/20', icon: 'text-risk-critical' },
+  high: { bg: 'bg-risk-high/20', icon: 'text-risk-high' },
+  medium: { bg: 'bg-risk-medium/20', icon: 'text-risk-medium' },
+  low: { bg: 'bg-risk-low/20', icon: 'text-risk-low' },
+};
+
 export function FindingsTab({ child }: FindingsTabProps) {
-  const [findings, setFindings] = useState<Finding[]>([]);
+  const [findings, setFindings] = useState<FindingWithContext[]>([]);
   const [loading, setLoading] = useState(true);
   const [riskFilter, setRiskFilter] = useState<string>('all');
-  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [selectedFinding, setSelectedFinding] = useState<FindingWithContext | null>(null);
   const [contextDialogOpen, setContextDialogOpen] = useState(false);
   const [contextMessages, setContextMessages] = useState<any[]>([]);
   const [loadingContext, setLoadingContext] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   useEffect(() => {
     fetchFindings();
@@ -70,20 +86,109 @@ export function FindingsTab({ child }: FindingsTabProps) {
 
     const { data, error } = await query;
     
-    if (!error) {
-      setFindings(data || []);
+    if (!error && data) {
+      // Fetch context for each finding
+      const findingsWithContext = await Promise.all(
+        data.map(async (finding) => {
+          const { data: evidence } = await supabase
+            .from('evidence_items')
+            .select('message_id, preview_text')
+            .eq('finding_id', finding.id)
+            .limit(1);
+
+          if (evidence && evidence.length > 0 && evidence[0].message_id) {
+            const { data: message } = await supabase
+              .from('messages')
+              .select('sender_label, text_content, text_excerpt, chat_id')
+              .eq('id', evidence[0].message_id)
+              .single();
+
+            if (message) {
+              const { data: chat } = await supabase
+                .from('chats')
+                .select('chat_name, is_group')
+                .eq('id', message.chat_id)
+                .single();
+
+              return {
+                ...finding,
+                senderName: message.sender_label,
+                messagePreview: message.text_content || message.text_excerpt || evidence[0].preview_text,
+                chatName: chat?.chat_name,
+                isGroup: chat?.is_group,
+              } as FindingWithContext;
+            }
+          }
+          return finding as FindingWithContext;
+        })
+      );
+      
+      setFindings(findingsWithContext);
     }
     
     setLoading(false);
   }
 
-  const openContextDialog = async (finding: Finding) => {
+  const handleMarkAsHandled = async (finding: FindingWithContext) => {
+    setActionLoading(finding.id);
+    
+    try {
+      const { error } = await supabase
+        .from('findings')
+        .update({ 
+          handled: true, 
+          handled_at: new Date().toISOString() 
+        })
+        .eq('id', finding.id);
+
+      if (error) throw error;
+
+      toast.success('הממצא סומן כטופל');
+      fetchFindings();
+    } catch (error: any) {
+      toast.error('שגיאה בסימון: ' + error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleShareWithTeacher = async (finding: FindingWithContext) => {
+    if (!child.teacher_email) {
+      toast.error('לא הוגדר מייל מורה. הגדירו בלשונית הגדרות.');
+      return;
+    }
+
+    setActionLoading(finding.id);
+    
+    try {
+      // Create a teacher_alert record
+      const { error } = await supabase
+        .from('teacher_alerts')
+        .insert({
+          child_id: child.id,
+          finding_id: finding.id,
+          parent_user_id: child.user_id,
+          teacher_email: child.teacher_email,
+          parent_message: `נמצא ממצא ברמת סיכון ${riskLabels[finding.risk_level as RiskLevel] || finding.risk_level}: ${finding.explanation}`,
+          status: 'pending',
+        });
+
+      if (error) throw error;
+
+      toast.success(`נשלחה התראה למורה: ${child.teacher_email}`);
+    } catch (error: any) {
+      toast.error('שגיאה בשליחה: ' + error.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const openContextDialog = async (finding: FindingWithContext) => {
     setSelectedFinding(finding);
     setContextDialogOpen(true);
     setLoadingContext(true);
     setContextMessages([]);
 
-    // Fetch evidence items for this finding to get the related messages
     const { data: evidenceItems } = await supabase
       .from('evidence_items')
       .select('message_id, preview_text')
@@ -93,19 +198,15 @@ export function FindingsTab({ child }: FindingsTabProps) {
       const messageIds = evidenceItems.map(e => e.message_id).filter(Boolean);
       
       if (messageIds.length > 0) {
-        // Get the flagged messages
         const { data: flaggedMessages } = await supabase
           .from('messages')
           .select('*, chats(chat_name)')
           .in('id', messageIds);
 
         if (flaggedMessages && flaggedMessages.length > 0) {
-          // Get the chat_id and timestamp to find surrounding messages
           const firstMessage = flaggedMessages[0];
           const chatId = firstMessage.chat_id;
-          const timestamp = firstMessage.message_timestamp;
 
-          // Get messages around the flagged one (5 before and 5 after)
           const { data: surroundingMessages } = await supabase
             .from('messages')
             .select('*, chats(chat_name)')
@@ -114,13 +215,11 @@ export function FindingsTab({ child }: FindingsTabProps) {
             .limit(20);
 
           if (surroundingMessages) {
-            // Find the index of the flagged message and get context around it
             const flaggedIndex = surroundingMessages.findIndex(m => m.id === firstMessage.id);
             const start = Math.max(0, flaggedIndex - 5);
             const end = Math.min(surroundingMessages.length, flaggedIndex + 6);
             const contextSlice = surroundingMessages.slice(start, end);
             
-            // Mark which messages are flagged
             const flaggedIds = new Set(messageIds);
             const messagesWithFlags = contextSlice.map(m => ({
               ...m,
@@ -144,6 +243,10 @@ export function FindingsTab({ child }: FindingsTabProps) {
       case 'low': return 'border-r-risk-low';
       default: return '';
     }
+  };
+
+  const getRiskStyles = (level: string | null) => {
+    return riskIcons[level || 'low'] || riskIcons.low;
   };
 
   return (
@@ -189,58 +292,128 @@ export function FindingsTab({ child }: FindingsTabProps) {
         </Card>
       ) : (
         <div className="space-y-4">
-          {findings.map((finding) => (
-            <Card 
-              key={finding.id} 
-              variant="risk"
-              className={`${finding.risk_level ? getRiskBorderColor(finding.risk_level) : ''}`}
-            >
-              <CardContent className="p-6">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center">
-                      <AlertTriangle className="w-5 h-5 text-warning" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        {finding.risk_level && (
-                          <Badge variant={
-                            finding.risk_level === 'critical' ? 'riskCritical' :
-                            finding.risk_level === 'high' ? 'riskHigh' :
-                            finding.risk_level === 'medium' ? 'riskMedium' : 'riskLow'
-                          }>
-                            {riskLabels[finding.risk_level]}
-                          </Badge>
-                        )}
-                        {(finding.threat_types as ThreatType[])?.map((type) => (
-                          <Badge key={type} variant="outline">
-                            {threatTypeLabels[type] || type}
-                          </Badge>
-                        ))}
+          {findings.map((finding) => {
+            const riskStyles = getRiskStyles(finding.risk_level);
+            const isHandled = finding.handled;
+            
+            return (
+              <Card 
+                key={finding.id} 
+                variant="risk"
+                className={`${finding.risk_level ? getRiskBorderColor(finding.risk_level) : ''} ${isHandled ? 'opacity-60' : ''}`}
+              >
+                <CardContent className="p-6">
+                  {/* Header - Status and Risk */}
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-12 h-12 rounded-xl ${riskStyles.bg} flex items-center justify-center`}>
+                        <AlertTriangle className={`w-6 h-6 ${riskStyles.icon}`} />
                       </div>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                        <Calendar className="w-3 h-3" />
-                        {format(new Date(finding.created_at), 'dd/MM/yyyy HH:mm', { locale: he })}
-                      </span>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {finding.risk_level && (
+                            <Badge variant={
+                              finding.risk_level === 'critical' ? 'riskCritical' :
+                              finding.risk_level === 'high' ? 'riskHigh' :
+                              finding.risk_level === 'medium' ? 'riskMedium' : 'riskLow'
+                            }>
+                              {riskLabels[finding.risk_level as RiskLevel]}
+                            </Badge>
+                          )}
+                          {(finding.threat_types as ThreatType[])?.map((type) => (
+                            <Badge key={type} variant="outline" className="text-xs">
+                              {threatTypeLabels[type] || type}
+                            </Badge>
+                          ))}
+                          {isHandled && (
+                            <Badge variant="secondary" className="text-xs">
+                              <CheckCheck className="w-3 h-3 ml-1" />
+                              טופל
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                          <Calendar className="w-3 h-3" />
+                          {format(new Date(finding.created_at), 'dd/MM/yyyy HH:mm', { locale: he })}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <p className="text-sm mb-4 leading-relaxed">{finding.explanation}</p>
+                  {/* Summary - What happened */}
+                  <div className="mb-4 p-4 rounded-xl bg-secondary/30 border border-border/50">
+                    <h4 className="font-medium text-sm text-muted-foreground mb-2">תקציר:</h4>
+                    <p className="text-sm leading-relaxed">{finding.explanation}</p>
+                  </div>
 
-                <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={() => openContextDialog(finding)}
-                  >
-                    <Eye className="w-4 h-4" />
-                    הצג הקשר
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                  {/* Message Content if available */}
+                  {finding.messagePreview && (
+                    <div className="mb-4 p-4 rounded-xl bg-background/50 border border-border/50">
+                      <h4 className="font-medium text-sm text-muted-foreground mb-2 flex items-center gap-2">
+                        <MessageCircle className="w-4 h-4" />
+                        תוכן ההודעה:
+                      </h4>
+                      <p className="text-sm leading-relaxed font-medium" dir="auto">
+                        "{finding.messagePreview}"
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Sender and Chat Info */}
+                  <div className="flex flex-wrap gap-4 mb-4 text-sm">
+                    {finding.senderName && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <User className="w-4 h-4" />
+                        <span>שולח: <span className="text-foreground font-medium">{finding.senderName}</span></span>
+                      </div>
+                    )}
+                    {finding.chatName && finding.isGroup && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Users className="w-4 h-4" />
+                        <span>קבוצה: <span className="text-foreground font-medium">{finding.chatName}</span></span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-wrap gap-2 pt-4 border-t border-border/50">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => openContextDialog(finding)}
+                    >
+                      <Eye className="w-4 h-4" />
+                      הצג הקשר
+                    </Button>
+                    
+                    {!isHandled && (
+                      <>
+                        <Button 
+                          variant="glow" 
+                          size="sm"
+                          onClick={() => handleShareWithTeacher(finding)}
+                          disabled={actionLoading === finding.id}
+                        >
+                          <Share2 className="w-4 h-4" />
+                          שתף עם מורה
+                        </Button>
+                        
+                        <Button 
+                          variant="secondary" 
+                          size="sm"
+                          onClick={() => handleMarkAsHandled(finding)}
+                          disabled={actionLoading === finding.id}
+                        >
+                          <CheckCheck className="w-4 h-4" />
+                          סמן כטופל
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
