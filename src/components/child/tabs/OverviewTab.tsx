@@ -276,23 +276,37 @@ export function OverviewTab({ child }: OverviewTabProps) {
                         </span>
                       </div>
                       <p className="text-sm text-foreground/90 line-clamp-2">
-                        {msg.msg_type === 'text' 
-                          ? (msg.text_content || msg.text_excerpt || '[הודעה ריקה]')
-                          : msg.msg_type === 'quote'
-                            ? `↩️ ${msg.text_content || '[ציטוט]'}`
-                            : msg.msg_type === 'reaction'
-                              ? `${msg.text_content || '👍'}`
-                              : msg.msg_type === 'image'
-                                ? `📷 ${msg.text_content || 'תמונה'}`
-                                : msg.msg_type === 'video'
-                                  ? `🎬 ${msg.text_content || 'וידאו'}`
-                                  : msg.msg_type === 'audio'
-                                    ? '🎤 הודעה קולית'
-                                    : msg.msg_type === 'file'
-                                      ? `📄 ${msg.text_content || 'קובץ'}`
-                                      : msg.msg_type === 'sticker'
-                                        ? '🎨 סטיקר'
-                                        : `[${msg.msg_type}]`}
+                        {(() => {
+                          const content = msg.text_content || msg.text_excerpt;
+                          if (msg.msg_type === 'text') {
+                            return content || '[הודעה ללא תוכן טקסט]';
+                          } else if (msg.msg_type === 'quote') {
+                            return `↩️ ${content || '[ציטוט]'}`;
+                          } else if (msg.msg_type === 'reaction') {
+                            return content || '👍';
+                          } else if (msg.msg_type === 'image') {
+                            return `📷 ${content || 'תמונה'}`;
+                          } else if (msg.msg_type === 'video') {
+                            return `🎬 ${content || 'וידאו'}`;
+                          } else if (msg.msg_type === 'audio' || msg.msg_type === 'ptt') {
+                            return '🎤 הודעה קולית';
+                          } else if (msg.msg_type === 'file' || msg.msg_type === 'document') {
+                            return `📄 ${content || 'קובץ'}`;
+                          } else if (msg.msg_type === 'sticker') {
+                            return '🎨 סטיקר';
+                          } else if (msg.msg_type === 'location') {
+                            return '📍 מיקום';
+                          } else if (msg.msg_type === 'contact' || msg.msg_type === 'vcard') {
+                            return '👤 איש קשר';
+                          } else if (msg.msg_type === 'poll') {
+                            return '📊 סקר';
+                          } else if (msg.msg_type === 'call_log') {
+                            return '📞 שיחה';
+                          } else {
+                            // For unknown types, show content if available or the type itself
+                            return content || `[${msg.msg_type}]`;
+                          }
+                        })()}
                       </p>
                       <span className="text-xs text-muted-foreground">
                         {new Date(msg.message_timestamp).toLocaleString('he-IL', {
