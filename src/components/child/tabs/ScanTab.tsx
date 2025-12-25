@@ -260,15 +260,16 @@ ${JSON.stringify(formattedMessages, null, 2)}
         throw new Error(aiResult.error);
       }
 
-      // Create finding if threats detected
-      if (aiResult.threatDetected && scan) {
+      // Create finding - save even when no threats for record keeping
+      if (scan) {
         const { error: findingError } = await supabase.from('findings').insert({
           scan_id: scan.id,
           child_id: child.id,
-          threat_detected: true,
-          risk_level: aiResult.riskLevel,
+          threat_detected: aiResult.threatDetected || false,
+          risk_level: aiResult.riskLevel || null,
           threat_types: aiResult.threatTypes || [],
-          explanation: aiResult.explanation,
+          explanation: aiResult.explanation || 'לא זוהו סיכונים',
+          ai_response_encrypted: aiResult, // Store full AI response
         });
 
         if (findingError) {
