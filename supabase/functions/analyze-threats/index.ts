@@ -23,7 +23,6 @@ interface AnalysisRequest {
   child_id: string;
   scan_id: string;
   messages: Message[];
-  lookback_window: string;
 }
 
 interface MediaAnalysisResult {
@@ -101,7 +100,7 @@ serve(async (req) => {
 
     // Clone request to read body twice (once for auth, once for processing)
     const requestBody = await req.json();
-    const { child_id, scan_id, messages, lookback_window }: AnalysisRequest = requestBody;
+    const { child_id, scan_id, messages }: AnalysisRequest = requestBody;
 
     // Verify authentication and child ownership
     const authResult = await verifyAuthAndOwnership(req, child_id);
@@ -213,17 +212,38 @@ serve(async (req) => {
       };
     });
 
-    const lookbackLabel = lookback_window === "24h" ? "24 שעות אחרונות" : 
-                          lookback_window === "7d" ? "7 ימים אחרונים" : "30 ימים אחרונים";
+    const userPrompt = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
 
-    const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
+המטרה שלך:
+לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
 
-טווח ניתוח: ${lookbackLabel}
+❗ חשוב מאוד:
+אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
+עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
+
+סוגי סיכון שמותר לזהות:
+- חרם, השפלה מתמשכת או אלימות רגשית קשה
+- איומים פיזיים מפורשים
+- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
+- סמים, אלכוהול או שידול לשימוש
+- פגיעה עצמית או עידוד לפגיעה עצמית
+- סחיטה, איום או מניפולציה מסוכנת
+
+❌ אסור להתריע על:
+- שיח יומיומי, בדיחות, קללות קלות
+- פוליטיקה, חדשות, דעות
+- ויכוחים רגילים
+- שפה בוטה בלי איום ממשי
+- תוכן לא נעים אך לא מסוכן
 
 הודעות לניתוח:
 ${JSON.stringify(formattedMessages, null, 2)}
 
-החזר תשובה בפורמט JSON בלבד עם המבנה הבא:
+---
+
+📤 החזר **JSON בלבד**, בלי טקסט חופשי, בלי הסברים מסביב.
+
+מבנה החזרה מחייב:
 {
   "threatDetected": boolean,
   "riskLevel": "low" | "medium" | "high" | "critical" | null,
@@ -245,6 +265,16 @@ ${JSON.stringify(formattedMessages, null, 2)}
     }
   ],
   "explanation": string
+}
+
+אם אין סיכון ממשי → החזר:
+{
+  "threatDetected": false,
+  "riskLevel": null,
+  "threatTypes": [],
+  "triggers": [],
+  "patterns": [],
+  "explanation": "לא זוהה סיכון ממשי"
 }`;
 
     // Step 1: Create a thread
