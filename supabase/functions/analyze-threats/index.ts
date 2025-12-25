@@ -32,7 +32,7 @@ interface MediaData {
 }
 
 // Download media and convert to Base64 - with size limit to prevent memory issues
-const MAX_FILE_SIZE = 150 * 1024; // 150KB limit per file
+const MAX_FILE_SIZE = 500 * 1024; // 500KB limit per file (increased from 150KB)
 
 async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
   try {
@@ -213,6 +213,8 @@ serve(async (req) => {
     );
 
     console.log(`Processing ${mediaMessages.length} media messages...`);
+    console.log(`Total messages: ${limitedMessages.length}, Messages with media_url: ${mediaMessages.length}`);
+    console.log(`Media types: ${JSON.stringify(mediaMessages.map(m => ({ type: m.msg_type, hasUrl: !!m.media_url, hasThumbnail: !!m.media_thumbnail_url })))}`);
 
     // Limit to 5 images to prevent memory overflow
     let imageCount = 0;
@@ -232,9 +234,10 @@ serve(async (req) => {
           imageCount++;
         }
       } else if (msg.msg_type === "video" && imageCount < MAX_IMAGES) {
-        // For video, prefer thumbnail which is smaller
-        const thumbnailUrl = msg.media_thumbnail_url;
+        // For video, prefer thumbnail, but try media_url if no thumbnail
+        const thumbnailUrl = msg.media_thumbnail_url || msg.media_url;
         if (thumbnailUrl) {
+          console.log(`Trying to download video thumbnail/frame from: ${thumbnailUrl}`);
           const mediaData = await downloadMediaAsBase64(thumbnailUrl);
           if (mediaData) {
             mediaDataMap.set(msg.id, { type: "video", data: mediaData, transcription: null });
