@@ -130,7 +130,7 @@ serve(async (req) => {
     const mediaAnalysisResults: Map<string, MediaAnalysisResult> = new Map();
     
     const mediaMessages = limitedMessages.filter(
-      (msg) => msg.media_url && ["image"].includes(msg.msg_type)
+      (msg) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
     );
     
     // Analyze media in parallel (up to 5 at a time)
@@ -173,10 +173,21 @@ serve(async (req) => {
       let content = msg.text_content || "";
       
       if (mediaAnalysis) {
-        content = `[תמונה: ${mediaAnalysis.description}]`;
-        if (mediaAnalysis.detected_text) {
-          content += ` טקסט בתמונה: "${mediaAnalysis.detected_text}"`;
+        // Format based on media type
+        if (msg.msg_type === "audio") {
+          content = `[הודעה קולית - תמלול: ${mediaAnalysis.detected_text || mediaAnalysis.description}]`;
+        } else if (msg.msg_type === "video") {
+          content = `[וידאו: ${mediaAnalysis.description}]`;
+          if (mediaAnalysis.detected_text) {
+            content += ` תוכן: "${mediaAnalysis.detected_text}"`;
+          }
+        } else {
+          content = `[תמונה: ${mediaAnalysis.description}]`;
+          if (mediaAnalysis.detected_text) {
+            content += ` טקסט בתמונה: "${mediaAnalysis.detected_text}"`;
+          }
         }
+        
         if (mediaAnalysis.risk_indicators && mediaAnalysis.risk_indicators.length > 0) {
           content += ` [סימני סיכון: ${mediaAnalysis.risk_indicators.join(", ")}]`;
         }
