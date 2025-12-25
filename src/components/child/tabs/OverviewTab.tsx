@@ -50,9 +50,10 @@ export function OverviewTab({ child }: OverviewTabProps) {
 
   useEffect(() => {
     let mounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
 
     async function fetchOverviewData() {
-      setLoading(true);
+      if (!mounted) return;
 
       // Fetch last scan
       const { data: scanData } = await supabase
@@ -126,7 +127,11 @@ export function OverviewTab({ child }: OverviewTabProps) {
       setLoading(false);
     }
 
+    setLoading(true);
     fetchOverviewData();
+
+    // Poll every 10 seconds for new messages
+    pollInterval = setInterval(fetchOverviewData, 10000);
 
     // Realtime: refresh overview when a new message arrives for this child
     const channel = supabase
@@ -140,7 +145,6 @@ export function OverviewTab({ child }: OverviewTabProps) {
           filter: `child_id=eq.${child.id}`,
         },
         () => {
-          // refresh counters + last message time + (small) data
           fetchOverviewData();
         }
       )
@@ -148,6 +152,9 @@ export function OverviewTab({ child }: OverviewTabProps) {
 
     return () => {
       mounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
       supabase.removeChannel(channel);
     };
   }, [child.id]);
