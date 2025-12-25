@@ -54,11 +54,25 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   const buildPrompt = (messages: any[]) => {
     const limitedMessages = messages.slice(-50);
 
+    // Count media types for summary
+    const imageCount = limitedMessages.filter(m => m.msg_type === 'image' && m.media_url).length;
+    const videoCount = limitedMessages.filter(m => m.msg_type === 'video' && m.media_url).length;
+    const audioCount = limitedMessages.filter(m => m.msg_type === 'audio' && m.media_url).length;
+
     const formattedMessages = limitedMessages.map((msg) => {
       let content = msg.text_content;
       if (!content) {
         if (msg.media_url) {
-          content = `[מדיה: ${msg.msg_type}] URL: ${msg.media_url}`;
+          // Show friendly description instead of raw URL
+          if (msg.msg_type === 'image') {
+            content = `[🖼️ תמונה - תיבדק על ידי AI]`;
+          } else if (msg.msg_type === 'video') {
+            content = `[🎬 וידאו - תמונה ממוזערת תיבדק על ידי AI]`;
+          } else if (msg.msg_type === 'audio') {
+            content = `[🎤 הודעה קולית - תתומלל ותיבדק על ידי AI]`;
+          } else {
+            content = `[📎 מדיה: ${msg.msg_type}]`;
+          }
         } else {
           content = `[מדיה: ${msg.msg_type}] (ללא URL)`;
         }
@@ -70,8 +84,9 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
         type: msg.msg_type,
         time: msg.message_timestamp,
         content: content.slice(0, 500),
-        media_url: msg.media_url || null,
+        media_url: msg.media_url ? '✓ יש URL' : null,
         chat: msg.chat_name || "שיחה",
+        mediaInfo: msg.media_url ? { type: msg.msg_type, hasUrl: true } : null,
       };
     });
 
