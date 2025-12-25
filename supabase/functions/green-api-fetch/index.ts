@@ -224,27 +224,44 @@ serve(async (req) => {
         const messages: GreenAPIMessage[] = await messagesResponse.json();
 
         for (const msg of messages) {
+          // Log media info for debugging
+          const messageType = msg.typeMessage || msg.type;
+          if (messageType !== "textMessage" && messageType !== "extendedTextMessage") {
+            console.log(`Media message: type=${messageType}, downloadUrl=${msg.downloadUrl || 'none'}, thumbnail=${msg.jpegThumbnail ? 'yes' : 'no'}`);
+          }
+
           // Check if message already exists
           const { data: existingMsg } = await supabase
             .from("messages")
-            .select("id")
+            .select("id, media_url")
             .eq("chat_id", dbChat.id)
             .eq("message_timestamp", new Date(msg.timestamp * 1000).toISOString())
-            .eq("sender_label", sanitizeText(msg.senderName || msg.senderId))
             .maybeSingle();
 
-          if (existingMsg) continue; // Skip existing messages
+          // If message exists but missing media_url, update it
+          if (existingMsg) {
+            if (!existingMsg.media_url && msg.downloadUrl) {
+              console.log(`Updating existing message ${existingMsg.id} with media_url`);
+              await supabase.from("messages")
+                .update({
+                  media_url: msg.downloadUrl,
+                  media_thumbnail_url: msg.jpegThumbnail || null,
+                })
+                .eq("id", existingMsg.id);
+            }
+            continue;
+          }
 
           let msgType = "text";
           let textContent = sanitizeText(msg.textMessage || msg.caption || "");
 
           // Detect message type from type or typeMessage field
-          const messageType = msg.typeMessage || msg.type;
-          if (messageType === "imageMessage") msgType = "image";
-          else if (messageType === "audioMessage" || messageType === "pttMessage") msgType = "audio";
-          else if (messageType === "videoMessage") msgType = "video";
-          else if (messageType === "documentMessage") msgType = "file";
-          else if (messageType === "stickerMessage") msgType = "sticker";
+          const msgTypeDetect = msg.typeMessage || msg.type;
+          if (msgTypeDetect === "imageMessage") msgType = "image";
+          else if (msgTypeDetect === "audioMessage" || msgTypeDetect === "pttMessage") msgType = "audio";
+          else if (msgTypeDetect === "videoMessage") msgType = "video";
+          else if (msgTypeDetect === "documentMessage") msgType = "file";
+          else if (msgTypeDetect === "stickerMessage") msgType = "sticker";
 
           // Detect outgoing messages: fromMe=true or type="outgoing"
           const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
