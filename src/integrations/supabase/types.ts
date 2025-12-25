@@ -613,45 +613,60 @@ export type Database = {
       }
       teacher_alerts: {
         Row: {
+          action_taken: string | null
+          category: string | null
           child_id: string
           created_at: string
           finding_id: string | null
           id: string
+          internal_notes: string | null
           parent_message: string | null
           parent_user_id: string
           responded_at: string | null
+          severity: string | null
           status: string
           teacher_email: string
           teacher_name: string | null
           teacher_response: string | null
+          timeline: Json | null
           updated_at: string
         }
         Insert: {
+          action_taken?: string | null
+          category?: string | null
           child_id: string
           created_at?: string
           finding_id?: string | null
           id?: string
+          internal_notes?: string | null
           parent_message?: string | null
           parent_user_id: string
           responded_at?: string | null
+          severity?: string | null
           status?: string
           teacher_email: string
           teacher_name?: string | null
           teacher_response?: string | null
+          timeline?: Json | null
           updated_at?: string
         }
         Update: {
+          action_taken?: string | null
+          category?: string | null
           child_id?: string
           created_at?: string
           finding_id?: string | null
           id?: string
+          internal_notes?: string | null
           parent_message?: string | null
           parent_user_id?: string
           responded_at?: string | null
+          severity?: string | null
           status?: string
           teacher_email?: string
           teacher_name?: string | null
           teacher_response?: string | null
+          timeline?: Json | null
           updated_at?: string
         }
         Relationships: [
@@ -671,15 +686,46 @@ export type Database = {
           },
         ]
       }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_user_roles: {
+        Args: { _user_id: string }
+        Returns: Database["public"]["Enums"]["app_role"][]
+      }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "parent" | "teacher" | "admin"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -806,6 +852,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["parent", "teacher", "admin"],
+    },
   },
 } as const
