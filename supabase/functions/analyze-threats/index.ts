@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -25,6 +26,74 @@ interface AnalysisRequest {
   messages: Message[];
 }
 
+interface MediaData {
+  base64: string;
+  mimeType: string;
+}
+
+// Download media and convert to Base64
+async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
+  try {
+    console.log(`Downloading media from: ${url}`);
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; SafetyBot/1.0)",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Failed to download media: ${response.status}`);
+      return null;
+    }
+    
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const buffer = await response.arrayBuffer();
+    const uint8Array = new Uint8Array(buffer);
+    
+    // Convert to base64 manually
+    let binary = "";
+    for (let i = 0; i < uint8Array.length; i++) {
+      binary += String.fromCharCode(uint8Array[i]);
+    }
+    const base64 = btoa(binary);
+    
+    console.log(`Downloaded media: ${contentType}, size: ${uint8Array.length} bytes`);
+    return { base64, mimeType: contentType };
+  } catch (error) {
+    console.error("Failed to download media:", error);
+    return null;
+  }
+}
+
+// Transcribe audio using the transcribe-audio edge function
+async function transcribeAudio(audioUrl: string, authHeader: string): Promise<string | null> {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    if (!supabaseUrl) return null;
+
+    console.log(`Transcribing audio from: ${audioUrl}`);
+    const response = await fetch(`${supabaseUrl}/functions/v1/transcribe-audio`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": authHeader,
+      },
+      body: JSON.stringify({ audio_url: audioUrl }),
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to transcribe audio: ${response.status}`);
+      return null;
+    }
+
+    const result = await response.json();
+    console.log(`Transcription result:`, result);
+    return result.transcription || result.text || null;
+  } catch (error) {
+    console.error("Failed to transcribe audio:", error);
+    return null;
+  }
+}
 
 // Helper function to verify user authentication and child ownership
 async function verifyAuthAndOwnership(
@@ -98,6 +167,7 @@ serve(async (req) => {
       return authResult;
     }
 
+    const authHeader = req.headers.get("Authorization") || "";
     console.log(`Authenticated user ${authResult.userId} analyzing messages for child ${child_id}`);
 
     if (!messages || messages.length === 0) {
@@ -117,20 +187,100 @@ serve(async (req) => {
     // Limit messages to avoid token overflow - take most recent 50 messages
     const limitedMessages = messages.slice(-50);
 
-    // Format messages for analysis - include media URLs directly
-    const formattedMessages = limitedMessages.map((msg) => {
-      return {
-        id: msg.id,
-        sender: msg.sender_label,
-        isChild: msg.is_child_sender,
-        type: msg.msg_type,
-        time: msg.message_timestamp,
-        content: msg.text_content || "",
-        chat: msg.chat_name || "שיחה",
-        mediaUrl: msg.media_url || null,
-        thumbnailUrl: msg.media_thumbnail_url || null,
-      };
-    });
+    // Process media messages - download images as Base64 and transcribe audio
+    const mediaDataMap: Map<string, { type: "image" | "audio" | "video"; data: MediaData | null; transcription: string | null }> = new Map();
+    
+    const mediaMessages = limitedMessages.filter(
+      (msg) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
+    );
+
+    console.log(`Processing ${mediaMessages.length} media messages...`);
+
+    // Limit to 10 images to prevent timeout
+    let imageCount = 0;
+    const MAX_IMAGES = 10;
+
+    for (const msg of mediaMessages) {
+      if (msg.msg_type === "audio" && msg.media_url) {
+        // Transcribe audio
+        const transcription = await transcribeAudio(msg.media_url, authHeader);
+        mediaDataMap.set(msg.id, { type: "audio", data: null, transcription });
+      } else if (msg.msg_type === "image" && msg.media_url && imageCount < MAX_IMAGES) {
+        // Download image as Base64
+        const mediaData = await downloadMediaAsBase64(msg.media_url);
+        if (mediaData) {
+          mediaDataMap.set(msg.id, { type: "image", data: mediaData, transcription: null });
+          imageCount++;
+        }
+      } else if (msg.msg_type === "video") {
+        // For video, try to use thumbnail
+        const thumbnailUrl = msg.media_thumbnail_url || msg.media_url;
+        if (thumbnailUrl && imageCount < MAX_IMAGES) {
+          const mediaData = await downloadMediaAsBase64(thumbnailUrl);
+          if (mediaData) {
+            mediaDataMap.set(msg.id, { type: "video", data: mediaData, transcription: null });
+            imageCount++;
+          }
+        }
+      }
+    }
+
+    console.log(`Processed media: ${imageCount} images, ${mediaDataMap.size} total`);
+
+    // Build text content for messages
+    const textParts: string[] = [];
+    const imageParts: { type: "image_url"; image_url: { url: string; detail: string } }[] = [];
+
+    for (const msg of limitedMessages) {
+      const mediaInfo = mediaDataMap.get(msg.id);
+      let messageText = "";
+
+      if (msg.msg_type === "text") {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: ${msg.text_content || ""}`;
+      } else if (mediaInfo?.type === "audio" && mediaInfo.transcription) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [הודעה קולית - תמלול: "${mediaInfo.transcription}"]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      } else if (mediaInfo?.type === "image" && mediaInfo.data) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [תמונה - ראה תמונה מצורפת #${imageParts.length + 1}]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+        // Add image to image parts
+        imageParts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${mediaInfo.data.mimeType};base64,${mediaInfo.data.base64}`,
+            detail: "low" // Use low detail to save tokens
+          }
+        });
+      } else if (mediaInfo?.type === "video" && mediaInfo.data) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [וידאו - ראה תמונה ממוזערת #${imageParts.length + 1}]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+        // Add thumbnail to image parts
+        imageParts.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${mediaInfo.data.mimeType};base64,${mediaInfo.data.base64}`,
+            detail: "low"
+          }
+        });
+      } else if (msg.msg_type !== "text") {
+        // Media without data
+        const mediaLabel = msg.msg_type === "audio" ? "הודעה קולית" : msg.msg_type === "video" ? "וידאו" : "תמונה";
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [${mediaLabel}]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      }
+
+      if (messageText) {
+        textParts.push(messageText);
+      }
+    }
 
     // System instructions for the AI
     const systemInstructions = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
@@ -155,108 +305,68 @@ serve(async (req) => {
 - פוליטיקה, חדשות, דעות
 - ויכוחים רגילים
 - שפה בוטה בלי איום ממשי
-- תוכן לא נעים אך לא מסוכן`;
+- תוכן לא נעים אך לא מסוכן
+
+בנוסף, בדוק היטב את התמונות המצורפות - חפש תוכן לא הולם, סימני סיכון, או כל דבר חשוד.
+
+החזר תשובה בפורמט JSON עם השדות הבאים:
+- threatDetected: boolean - האם זוהה איום
+- riskLevel: "low" | "medium" | "high" | "critical" | null
+- threatTypes: string[] - סוגי האיומים
+- triggers: array של אובייקטים עם messageId, type, preview, confidence
+- patterns: array של אובייקטים עם chatId, patternType, description, confidence  
+- explanation: string - הסבר קצר בעברית`;
 
     const userPrompt = `הודעות לניתוח:
-${JSON.stringify(formattedMessages, null, 2)}
 
-נתח את ההודעות וזהה סיכונים לפי ההנחיות.`;
+${textParts.join("\n")}
 
-    // Use OpenAI Responses API with structured output
-    console.log("Calling OpenAI Responses API...");
+${imageParts.length > 0 ? `\nמצורפות ${imageParts.length} תמונות לבדיקה.` : ""}
+
+נתח את ההודעות וזהה סיכונים לפי ההנחיות. החזר JSON בלבד.`;
+
+    // Build the content array for GPT Vision
+    const contentArray: Array<{ type: string; text?: string; image_url?: { url: string; detail: string } }> = [
+      { type: "text", text: userPrompt }
+    ];
+
+    // Add images
+    for (const img of imageParts) {
+      contentArray.push(img);
+    }
+
+    console.log(`Calling OpenAI Chat Completions API with ${imageParts.length} images...`);
     
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4.1",
-        instructions: systemInstructions,
-        input: userPrompt,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "threat_analysis",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                threatDetected: { 
-                  type: "boolean",
-                  description: "האם זוהה איום או סיכון ממשי"
-                },
-                riskLevel: { 
-                  type: ["string", "null"],
-                  enum: ["low", "medium", "high", "critical", null],
-                  description: "רמת הסיכון: low, medium, high, critical או null אם אין איום"
-                },
-                threatTypes: { 
-                  type: "array",
-                  items: { type: "string" },
-                  description: "סוגי האיומים שזוהו"
-                },
-                triggers: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      messageId: { type: "string" },
-                      type: { 
-                        type: "string",
-                        enum: ["text", "image", "audio", "video"]
-                      },
-                      preview: { type: "string" },
-                      confidence: { type: "number" }
-                    },
-                    required: ["messageId", "type", "preview", "confidence"],
-                    additionalProperties: false
-                  },
-                  description: "הודעות ספציפיות שגרמו לזיהוי האיום"
-                },
-                patterns: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      chatId: { type: "string" },
-                      patternType: { type: "string" },
-                      description: { type: "string" },
-                      confidence: { type: "number" }
-                    },
-                    required: ["chatId", "patternType", "description", "confidence"],
-                    additionalProperties: false
-                  },
-                  description: "דפוסי התנהגות חשודים שזוהו"
-                },
-                explanation: { 
-                  type: "string",
-                  description: "הסבר קצר בעברית על הממצאים"
-                }
-              },
-              required: ["threatDetected", "riskLevel", "threatTypes", "triggers", "patterns", "explanation"],
-              additionalProperties: false
-            }
-          }
-        }
+        model: "gpt-4o", // Vision-capable model
+        messages: [
+          { role: "system", content: systemInstructions },
+          { role: "user", content: contentArray }
+        ],
+        max_tokens: 2000,
+        response_format: { type: "json_object" }
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("OpenAI Responses API error:", response.status, errorText);
+      console.error("OpenAI Chat API error:", response.status, errorText);
       throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
     }
 
     const result = await response.json();
-    console.log("OpenAI Responses API result:", JSON.stringify(result, null, 2));
+    console.log("OpenAI Chat API result:", JSON.stringify(result, null, 2));
 
     // Extract the structured output from the response
     let analysisResult;
     try {
-      // The response structure for Responses API
-      const outputText = result.output?.[0]?.content?.[0]?.text;
+      const outputText = result.choices?.[0]?.message?.content;
       if (outputText) {
         analysisResult = JSON.parse(outputText);
       } else {
