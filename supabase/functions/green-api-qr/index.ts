@@ -12,11 +12,34 @@ interface QRResponse {
 }
 
 serve(async (req) => {
+  console.log("green-api-qr: Request received", req.method);
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Parse body first to get child_id
+    let action = "qr";
+    let childId: string | null = null;
+    
+    try {
+      const body = await req.json();
+      console.log("green-api-qr: Body parsed", JSON.stringify(body));
+      action = body.action || "qr";
+      childId = body.child_id || null;
+    } catch (e) {
+      console.error("green-api-qr: Body parse error", e);
+    }
+
+    if (!childId) {
+      console.error("green-api-qr: child_id missing");
+      return new Response(
+        JSON.stringify({ type: "error", message: "child_id is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Verify authentication
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -41,23 +64,9 @@ serve(async (req) => {
       );
     }
 
+    console.log("green-api-qr: Authenticated user", user.id, "action:", action, "child_id:", childId);
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    let action = "qr";
-    let childId: string | null = null;
-    
-    try {
-      const body = await req.clone().json();
-      action = body.action || "qr";
-      childId = body.child_id || null;
-    } catch { /* default */ }
-
-    if (!childId) {
-      return new Response(
-        JSON.stringify({ type: "error", message: "child_id is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     // Verify user owns this child
     const { data: child } = await supabase
