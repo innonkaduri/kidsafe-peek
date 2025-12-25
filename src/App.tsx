@@ -27,8 +27,8 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
-          <BackgroundSync />
           <BrowserRouter>
+            <BackgroundSync />
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/auth" element={<Auth />} />
