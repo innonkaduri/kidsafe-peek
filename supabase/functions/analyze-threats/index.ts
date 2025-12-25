@@ -31,7 +31,9 @@ interface MediaData {
   mimeType: string;
 }
 
-// Download media and convert to Base64
+// Download media and convert to Base64 - with size limit to prevent memory issues
+const MAX_FILE_SIZE = 150 * 1024; // 150KB limit per file
+
 async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
   try {
     console.log(`Downloading media from: ${url}`);
@@ -46,14 +48,30 @@ async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
       return null;
     }
     
+    // Check content length before downloading
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength) > MAX_FILE_SIZE) {
+      console.log(`Skipping large file: ${contentLength} bytes`);
+      return null;
+    }
+    
     const contentType = response.headers.get("content-type") || "image/jpeg";
     const buffer = await response.arrayBuffer();
+    
+    // Skip if too large (backup check)
+    if (buffer.byteLength > MAX_FILE_SIZE) {
+      console.log(`Skipping large file after download: ${buffer.byteLength} bytes`);
+      return null;
+    }
+    
     const uint8Array = new Uint8Array(buffer);
     
-    // Convert to base64 manually
+    // Convert to base64 in chunks to reduce memory pressure
+    const CHUNK_SIZE = 8192;
     let binary = "";
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
+    for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
+      const chunk = uint8Array.subarray(i, Math.min(i + CHUNK_SIZE, uint8Array.length));
+      binary += String.fromCharCode.apply(null, Array.from(chunk));
     }
     const base64 = btoa(binary);
     
@@ -196,10 +214,11 @@ serve(async (req) => {
 
     console.log(`Processing ${mediaMessages.length} media messages...`);
 
-    // Limit to 10 images to prevent timeout
+    // Limit to 5 images to prevent memory overflow
     let imageCount = 0;
-    const MAX_IMAGES = 10;
+    const MAX_IMAGES = 5;
 
+    // Process images one at a time to minimize memory usage
     for (const msg of mediaMessages) {
       if (msg.msg_type === "audio" && msg.media_url) {
         // Transcribe audio
@@ -212,10 +231,10 @@ serve(async (req) => {
           mediaDataMap.set(msg.id, { type: "image", data: mediaData, transcription: null });
           imageCount++;
         }
-      } else if (msg.msg_type === "video") {
-        // For video, try to use thumbnail
-        const thumbnailUrl = msg.media_thumbnail_url || msg.media_url;
-        if (thumbnailUrl && imageCount < MAX_IMAGES) {
+      } else if (msg.msg_type === "video" && imageCount < MAX_IMAGES) {
+        // For video, prefer thumbnail which is smaller
+        const thumbnailUrl = msg.media_thumbnail_url;
+        if (thumbnailUrl) {
           const mediaData = await downloadMediaAsBase64(thumbnailUrl);
           if (mediaData) {
             mediaDataMap.set(msg.id, { type: "video", data: mediaData, transcription: null });
