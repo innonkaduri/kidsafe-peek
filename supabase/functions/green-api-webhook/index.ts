@@ -47,11 +47,26 @@ interface GreenAPIMessage {
   stateInstance?: string; // For state webhooks
 }
 
-// Sanitize text to remove invalid UTF-8 sequences (broken surrogates)
+// Sanitize text to remove invalid UTF-8 sequences (broken surrogates) and other problematic characters
 function sanitizeText(text: string | null | undefined): string {
   if (!text) return "";
   // Remove unpaired surrogates which cause PostgreSQL JSON errors
-  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+  // Also remove other problematic Unicode characters
+  return text
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "") // Remove high surrogates without low
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "") // Remove low surrogates without high
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // Remove control characters except \t \n \r
+    .replace(/\uFFFE|\uFFFF/g, ""); // Remove non-characters
+}
+
+// Safely sanitize base64 thumbnail - return null if it might cause issues
+function sanitizeThumbnail(thumbnail: string | null | undefined): string | null {
+  if (!thumbnail) return null;
+  // Skip thumbnails that are too large (>50KB base64) or might contain broken data
+  if (thumbnail.length > 70000) return null;
+  // Check if it looks like valid base64
+  if (!/^[A-Za-z0-9+/=]+$/.test(thumbnail)) return null;
+  return thumbnail;
 }
 
 serve(async (req) => {
@@ -274,17 +289,17 @@ serve(async (req) => {
       msgType = "image";
       textContent = sanitizeText(fileData?.caption);
       mediaUrl = fileData?.downloadUrl || null;
-      mediaThumbnailUrl = fileData?.jpegThumbnail
-        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
-        : null;
+      // Use sanitized thumbnail to avoid Unicode errors
+      const safeThumbnail = sanitizeThumbnail(fileData?.jpegThumbnail);
+      mediaThumbnailUrl = safeThumbnail ? `data:image/jpeg;base64,${safeThumbnail}` : null;
       console.log("Image message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "videoMessage") {
       msgType = "video";
       textContent = sanitizeText(fileData?.caption);
       mediaUrl = fileData?.downloadUrl || null;
-      mediaThumbnailUrl = fileData?.jpegThumbnail
-        ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
-        : null;
+      // Use sanitized thumbnail to avoid Unicode errors
+      const safeThumbnail = sanitizeThumbnail(fileData?.jpegThumbnail);
+      mediaThumbnailUrl = safeThumbnail ? `data:image/jpeg;base64,${safeThumbnail}` : null;
       console.log("Video message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "audioMessage") {
       msgType = "audio";
@@ -348,10 +363,30 @@ serve(async (req) => {
       media_thumbnail_url: mediaThumbnailUrl,
     };
 
-    const { error: msgError } = await supabase.from("messages").insert([payload]);
+    let { error: msgError } = await supabase.from("messages").insert([payload]);
+
+    // If insert fails with Unicode/JSON error, retry without thumbnail
+    if (msgError && msgError.code === "22P02") {
+      console.warn("Insert failed with JSON error, retrying without thumbnail...");
+      const payloadWithoutThumbnail = { ...payload, media_thumbnail_url: null };
+      const retryResult = await supabase.from("messages").insert([payloadWithoutThumbnail]);
+      msgError = retryResult.error;
+      
+      // If still failing, try without text content too
+      if (msgError && msgError.code === "22P02") {
+        console.warn("Retry failed, trying with minimal payload...");
+        const minimalPayload = { 
+          ...payloadWithoutThumbnail, 
+          text_content: sanitizeText(textContent.slice(0, 500)), // Truncate
+          text_excerpt: sanitizeText(textContent.slice(0, 50))
+        };
+        const finalResult = await supabase.from("messages").insert([minimalPayload]);
+        msgError = finalResult.error;
+      }
+    }
 
     if (msgError) {
-      console.error("Error inserting message:", msgError);
+      console.error("Error inserting message after retries:", msgError);
       throw msgError;
     }
 

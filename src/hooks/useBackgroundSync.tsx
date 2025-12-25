@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 
-const SYNC_INTERVAL_MS = 60000; // Sync every 60 seconds
+const SYNC_INTERVAL_MS = 30000; // Sync every 30 seconds (backup for webhook failures)
 
 export function useBackgroundSync() {
   const { user } = useAuth();
@@ -16,10 +16,11 @@ export function useBackgroundSync() {
     
     try {
       // Get all children with connected WhatsApp instances
+      // Check for both 'connected' and 'authorized' statuses
       const { data: credentials, error: credError } = await supabase
         .from('connector_credentials')
         .select('child_id, status')
-        .eq('status', 'connected');
+        .in('status', ['connected', 'authorized']);
       
       if (credError) {
         console.error('Background sync: Error fetching credentials:', credError);
