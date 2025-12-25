@@ -215,15 +215,28 @@ serve(async (req) => {
     const msgData = webhookData.messageData;
     const typeMessage = msgData?.typeMessage;
 
+    // Log raw message data for debugging media issues
+    console.log("Message type:", typeMessage, "Full messageData:", JSON.stringify(msgData));
+
+    // Green API uses fileMessageData for all media types
+    // Also check type-specific properties as fallback
     const getFileData = (): FileMessageData | undefined => {
-      if (typeMessage === "imageMessage") return msgData?.imageMessage;
-      if (typeMessage === "videoMessage") return msgData?.videoMessage;
-      if (typeMessage === "audioMessage") return msgData?.audioMessage;
-      if (typeMessage === "documentMessage") return msgData?.documentMessage;
-      return msgData?.fileMessageData;
+      // Primary: fileMessageData (used by Green API for all media)
+      if (msgData?.fileMessageData) return msgData.fileMessageData;
+      // Fallbacks for type-specific properties
+      if (typeMessage === "imageMessage" && msgData?.imageMessage) return msgData.imageMessage;
+      if (typeMessage === "videoMessage" && msgData?.videoMessage) return msgData.videoMessage;
+      if (typeMessage === "audioMessage" && msgData?.audioMessage) return msgData.audioMessage;
+      if (typeMessage === "documentMessage" && msgData?.documentMessage) return msgData.documentMessage;
+      return undefined;
     };
 
     const fileData = getFileData();
+    
+    // Log extracted file data
+    if (fileData) {
+      console.log("Extracted fileData:", JSON.stringify(fileData));
+    }
 
     if (typeMessage === "textMessage" && msgData?.textMessageData) {
       msgType = "text";
@@ -238,6 +251,7 @@ serve(async (req) => {
       mediaThumbnailUrl = fileData?.jpegThumbnail
         ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
         : null;
+      console.log("Image message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "videoMessage") {
       msgType = "video";
       textContent = sanitizeText(fileData?.caption);
@@ -245,9 +259,11 @@ serve(async (req) => {
       mediaThumbnailUrl = fileData?.jpegThumbnail
         ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
         : null;
+      console.log("Video message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "audioMessage") {
       msgType = "audio";
       mediaUrl = fileData?.downloadUrl || null;
+      console.log("Audio message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "documentMessage") {
       msgType = "file";
       textContent = sanitizeText(fileData?.fileName || fileData?.caption);
