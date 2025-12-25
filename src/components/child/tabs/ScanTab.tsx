@@ -50,15 +50,26 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   const buildPrompt = (messages: any[], lookbackWindow: LookbackWindow) => {
     const limitedMessages = messages.slice(-50);
 
-    const formattedMessages = limitedMessages.map((msg) => ({
-      id: msg.id,
-      sender: msg.sender_label,
-      isChild: msg.is_child_sender,
-      type: msg.msg_type,
-      time: msg.message_timestamp,
-      content: (msg.text_content || "[מדיה]").slice(0, 300),
-      chat: msg.chat_name || "שיחה",
-    }));
+    const formattedMessages = limitedMessages.map((msg) => {
+      let content = msg.text_content;
+      if (!content) {
+        if (msg.media_url) {
+          content = `[מדיה: ${msg.msg_type}] URL: ${msg.media_url}`;
+        } else {
+          content = `[מדיה: ${msg.msg_type}] (ללא URL)`;
+        }
+      }
+      return {
+        id: msg.id,
+        sender: msg.sender_label,
+        isChild: msg.is_child_sender,
+        type: msg.msg_type,
+        time: msg.message_timestamp,
+        content: content.slice(0, 500),
+        media_url: msg.media_url || null,
+        chat: msg.chat_name || "שיחה",
+      };
+    });
 
     const lookbackLabel =
       lookbackWindow === '24h'
@@ -126,6 +137,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
           msg_type,
           message_timestamp,
           text_content,
+          media_url,
           chat_id,
           chats!inner(chat_name)
         `)
@@ -143,6 +155,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
         msg_type: msg.msg_type,
         message_timestamp: msg.message_timestamp,
         text_content: msg.text_content,
+        media_url: msg.media_url,
         chat_name: msg.chats?.chat_name,
       }));
 
@@ -191,6 +204,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
           msg_type,
           message_timestamp,
           text_content,
+          media_url,
           chat_id,
           chats!inner(chat_name)
         `)
@@ -210,6 +224,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
         msg_type: msg.msg_type,
         message_timestamp: msg.message_timestamp,
         text_content: msg.text_content,
+        media_url: msg.media_url,
         chat_name: msg.chats?.chat_name,
       }));
 
