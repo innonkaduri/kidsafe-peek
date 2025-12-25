@@ -25,13 +25,6 @@ interface AnalysisRequest {
   messages: Message[];
 }
 
-interface MediaAnalysisResult {
-  description: string;
-  detected_text: string | null;
-  risk_indicators: string[];
-  risk_level: string;
-  confidence: number;
-}
 
 // Helper function to verify user authentication and child ownership
 async function verifyAuthAndOwnership(
@@ -124,87 +117,18 @@ serve(async (req) => {
     // Limit messages to avoid token overflow - take most recent 50 messages
     const limitedMessages = messages.slice(-50);
 
-    // Analyze media messages with GPT Vision
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-    const mediaAnalysisResults: Map<string, MediaAnalysisResult> = new Map();
-    
-    const mediaMessages = limitedMessages.filter(
-      (msg) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
-    );
-    
-    // Analyze media in parallel (up to 5 at a time)
-    if (mediaMessages.length > 0 && SUPABASE_URL) {
-      const authHeader = req.headers.get("Authorization");
-      const analyzeMedia = async (msg: Message): Promise<void> => {
-        try {
-          const response = await fetch(`${SUPABASE_URL}/functions/v1/analyze-media`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": authHeader || "",
-            },
-            body: JSON.stringify({
-              media_url: msg.media_url,
-              media_type: msg.msg_type,
-              child_id: child_id,
-            }),
-          });
-          
-          if (response.ok) {
-            const result = await response.json();
-            mediaAnalysisResults.set(msg.id, result);
-          }
-        } catch (error) {
-          console.error(`Failed to analyze media ${msg.id}:`, error);
-        }
-      };
-      
-      // Process in batches of 5
-      for (let i = 0; i < mediaMessages.length; i += 5) {
-        const batch = mediaMessages.slice(i, i + 5);
-        await Promise.all(batch.map(analyzeMedia));
-      }
-    }
-
-    // Format messages for analysis - include media analysis results
+    // Format messages for analysis - include media URLs directly
     const formattedMessages = limitedMessages.map((msg) => {
-      const mediaAnalysis = mediaAnalysisResults.get(msg.id);
-      let content = msg.text_content || "";
-      
-      if (mediaAnalysis) {
-        if (msg.msg_type === "audio") {
-          content = `[הודעה קולית - תמלול: ${mediaAnalysis.detected_text || mediaAnalysis.description}]`;
-        } else if (msg.msg_type === "video") {
-          content = `[וידאו: ${mediaAnalysis.description}]`;
-          if (mediaAnalysis.detected_text) {
-            content += ` תוכן: "${mediaAnalysis.detected_text}"`;
-          }
-        } else {
-          content = `[תמונה: ${mediaAnalysis.description}]`;
-          if (mediaAnalysis.detected_text) {
-            content += ` טקסט בתמונה: "${mediaAnalysis.detected_text}"`;
-          }
-        }
-        
-        if (mediaAnalysis.risk_indicators && mediaAnalysis.risk_indicators.length > 0) {
-          content += ` [סימני סיכון: ${mediaAnalysis.risk_indicators.join(", ")}]`;
-        }
-        if (msg.text_content) {
-          content += ` כיתוב: ${msg.text_content}`;
-        }
-      } else if (msg.msg_type !== "text" && !content) {
-        content = `[${msg.msg_type === "audio" ? "הודעה קולית" : msg.msg_type === "video" ? "וידאו" : "מדיה"}]`;
-      }
-      
       return {
         id: msg.id,
         sender: msg.sender_label,
         isChild: msg.is_child_sender,
         type: msg.msg_type,
         time: msg.message_timestamp,
-        content: content.slice(0, 500),
+        content: msg.text_content || "",
         chat: msg.chat_name || "שיחה",
-        mediaRiskLevel: mediaAnalysis?.risk_level || null,
+        mediaUrl: msg.media_url || null,
+        thumbnailUrl: msg.media_thumbnail_url || null,
       };
     });
 
