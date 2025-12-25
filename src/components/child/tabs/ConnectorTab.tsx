@@ -225,16 +225,57 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     setIsDeleting(true);
     
     try {
+      // First, delete the Green API instance
       const { data, error } = await supabase.functions.invoke('green-api-partner', {
         body: { action: 'deleteInstance', child_id: child.id },
       });
 
       if (error) throw error;
 
+      // Delete all related data for this child
+      // Order matters due to foreign key constraints
+      
+      // 1. Get finding IDs and delete evidence_items
+      const { data: findings } = await supabase
+        .from('findings')
+        .select('id')
+        .eq('child_id', child.id);
+      
+      if (findings && findings.length > 0) {
+        const findingIds = findings.map(f => f.id);
+        await supabase.from('evidence_items').delete().in('finding_id', findingIds);
+      }
+      
+      // 2. Get scan IDs and delete patterns
+      const { data: scans } = await supabase
+        .from('scans')
+        .select('id')
+        .eq('child_id', child.id);
+      
+      if (scans && scans.length > 0) {
+        const scanIds = scans.map(s => s.id);
+        await supabase.from('patterns').delete().in('scan_id', scanIds);
+      }
+
+      // 3. Delete findings
+      await supabase.from('findings').delete().eq('child_id', child.id);
+      
+      // 4. Delete scans
+      await supabase.from('scans').delete().eq('child_id', child.id);
+      
+      // 5. Delete messages
+      await supabase.from('messages').delete().eq('child_id', child.id);
+      
+      // 6. Delete chats
+      await supabase.from('chats').delete().eq('child_id', child.id);
+      
+      // 7. Delete imports
+      await supabase.from('imports').delete().eq('child_id', child.id);
+
       clearIntervals();
       setStatus('no_instance');
       setQrCode(null);
-      toast.success('החיבור נותק בהצלחה');
+      toast.success('החיבור נותק וכל הנתונים נמחקו');
       onUpdate();
       
     } catch (error: any) {
