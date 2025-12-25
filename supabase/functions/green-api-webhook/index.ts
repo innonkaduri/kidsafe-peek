@@ -96,29 +96,35 @@ serve(async (req) => {
             .eq("id", cred.id);
           console.log("Updated status to authorized for child:", cred.child_id);
         } else if (newState === "notAuthorized" || newState === "sleeping") {
-          // WhatsApp disconnected - delete the instance
-          console.log("Instance disconnected, deleting for child:", cred.child_id);
-          
-          // Delete from partner API
-          const partnerToken = Deno.env.get("GREEN_API_PARTNER_TOKEN");
-          const partnerUrl = Deno.env.get("GREEN_API_PARTNER_URL") || "https://api.green-api.com";
-          
-          if (partnerToken) {
-            try {
-              await fetch(`${partnerUrl}/partner/deleteInstanceAccount/${partnerToken}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ idInstance: parseInt(instanceId) }),
-              });
-              console.log("Instance deleted from Green API");
-            } catch (e) {
-              console.error("Failed to delete instance from Green API:", e);
+          // Only delete if the instance was previously authorized (user disconnected)
+          // Don't delete if status is still 'pending' - user hasn't scanned QR yet
+          if (cred.status === "authorized") {
+            console.log("User disconnected after being authorized, deleting for child:", cred.child_id);
+            
+            // Delete from partner API
+            const partnerToken = Deno.env.get("GREEN_API_PARTNER_TOKEN");
+            const partnerUrl = Deno.env.get("GREEN_API_PARTNER_URL") || "https://api.green-api.com";
+            
+            if (partnerToken) {
+              try {
+                await fetch(`${partnerUrl}/partner/deleteInstanceAccount/${partnerToken}`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ idInstance: parseInt(instanceId) }),
+                });
+                console.log("Instance deleted from Green API");
+              } catch (e) {
+                console.error("Failed to delete instance from Green API:", e);
+              }
             }
-          }
 
-          // Delete credential from DB
-          await supabase.from("connector_credentials").delete().eq("id", cred.id);
-          console.log("Credential deleted from DB");
+            // Delete credential from DB
+            await supabase.from("connector_credentials").delete().eq("id", cred.id);
+            console.log("Credential deleted from DB");
+          } else {
+            // Instance is still pending - waiting for QR scan, don't delete
+            console.log("Instance still pending (status:", cred.status, "), waiting for QR scan");
+          }
         }
       }
 
