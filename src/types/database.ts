@@ -47,6 +47,7 @@ export interface Finding {
   risk_level: string | null;
   threat_types: any;
   explanation: string | null;
+  ai_response_encrypted: any;
   handled: boolean;
   handled_at: string | null;
   created_at: string;

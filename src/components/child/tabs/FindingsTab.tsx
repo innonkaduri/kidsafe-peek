@@ -73,11 +73,11 @@ export function FindingsTab({ child }: FindingsTabProps) {
   async function fetchFindings() {
     setLoading(true);
     
+    // Fetch all findings - including non-threats to show scan history
     let query = supabase
       .from('findings')
       .select('*')
       .eq('child_id', child.id)
-      .eq('threat_detected', true)
       .order('created_at', { ascending: false });
 
     if (riskFilter !== 'all') {
@@ -342,8 +342,39 @@ export function FindingsTab({ child }: FindingsTabProps) {
 
                   {/* Summary - What happened */}
                   <div className="mb-4 p-4 rounded-xl bg-secondary/30 border border-border/50">
-                    <h4 className="font-medium text-sm text-muted-foreground mb-2">תקציר:</h4>
+                    <h4 className="font-medium text-sm text-muted-foreground mb-2">תשובת AI:</h4>
                     <p className="text-sm leading-relaxed">{finding.explanation}</p>
+                    
+                    {/* Show full AI response details if available */}
+                    {finding.ai_response_encrypted && (
+                      <div className="mt-3 pt-3 border-t border-border/30 space-y-2">
+                        {(finding.ai_response_encrypted as any).threatTypes?.length > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            <strong>סוגי איום:</strong> {(finding.ai_response_encrypted as any).threatTypes.join(', ')}
+                          </p>
+                        )}
+                        {(finding.ai_response_encrypted as any).patterns?.length > 0 && (
+                          <div className="text-xs text-muted-foreground">
+                            <strong>דפוסים שזוהו:</strong>
+                            <ul className="list-disc list-inside mt-1">
+                              {(finding.ai_response_encrypted as any).patterns.map((p: any, i: number) => (
+                                <li key={i}>{p.patternType}: {p.description}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {(finding.ai_response_encrypted as any).triggers?.length > 0 && (
+                          <div className="text-xs text-muted-foreground">
+                            <strong>הודעות שהפעילו התראה:</strong>
+                            <ul className="list-disc list-inside mt-1">
+                              {(finding.ai_response_encrypted as any).triggers.slice(0, 5).map((t: any, i: number) => (
+                                <li key={i}>"{t.preview?.slice(0, 100)}..." (ביטחון: {Math.round((t.confidence || 0) * 100)}%)</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Message Content if available */}
