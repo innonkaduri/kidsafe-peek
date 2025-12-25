@@ -50,12 +50,12 @@ async function verifyAuthAndOwnership(
   }
 
   const token = authHeader.replace("Bearer ", "");
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   
-  const supabaseAuth = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!
-  );
-
+  // Auth client for user verification
+  const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey);
   const { data: { user }, error: authError } = await supabaseAuth.auth.getUser(token);
   
   if (authError || !user) {
@@ -66,13 +66,16 @@ async function verifyAuthAndOwnership(
     );
   }
 
+  // Service client for ownership check (bypasses RLS)
+  const supabaseService = createClient(supabaseUrl, supabaseServiceKey);
+  
   // Verify user owns the child
-  const { data: child, error: childError } = await supabaseAuth
+  const { data: child, error: childError } = await supabaseService
     .from("children")
     .select("id")
     .eq("id", childId)
     .eq("user_id", user.id)
-    .single();
+    .maybeSingle();
 
   if (childError || !child) {
     console.error("Child ownership verification failed:", childError);
