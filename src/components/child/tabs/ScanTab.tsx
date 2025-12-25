@@ -78,7 +78,7 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
           ? '7 ימים אחרונים'
           : '30 ימים אחרונים';
 
-    const userPrompt = אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
+    const userPrompt = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
 
 המטרה שלך:
 לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
@@ -144,7 +144,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
   "triggers": [],
   "patterns": [],
   "explanation": "לא זוהה סיכון ממשי"
-}
+}`;
     const oldestMessageAt = limitedMessages[0]?.message_timestamp ?? null;
     const newestMessageAt = limitedMessages[limitedMessages.length - 1]?.message_timestamp ?? null;
 
