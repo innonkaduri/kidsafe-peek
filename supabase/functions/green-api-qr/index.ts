@@ -154,10 +154,22 @@ serve(async (req) => {
         );
       }
       
-      // 4xx (except 429) means invalid credentials/instance (deleted, expired, not ready)
-      if (qrResponse.status >= 400 && qrResponse.status < 500) {
-        console.log("green-api-qr: Instance invalid (", qrResponse.status, "), clearing credentials");
-
+      // 400 often means instance not ready yet - don't delete, just wait
+      if (qrResponse.status === 400) {
+        console.log("green-api-qr: Instance not ready yet (400), waiting...");
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            message: "Instance is initializing, please wait...",
+            notReady: true,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // 401 means invalid/expired credentials - clear them
+      if (qrResponse.status === 401) {
+        console.log("green-api-qr: Instance invalid (401), clearing credentials");
         await supabase
           .from("connector_credentials")
           .delete()
@@ -167,6 +179,18 @@ serve(async (req) => {
           JSON.stringify({
             type: "noInstance",
             message: "Instance expired/invalid. Please create a new connection.",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Other 4xx errors
+      if (qrResponse.status >= 400 && qrResponse.status < 500) {
+        console.log("green-api-qr: QR error", qrResponse.status);
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            message: `QR code error: ${qrResponse.status}`,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );

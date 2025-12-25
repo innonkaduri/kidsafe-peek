@@ -207,8 +207,9 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
       
       toast.success('מופע נוצר בהצלחה! מחכה לסריקת QR...');
       
-      // Wait a moment for instance to be ready, then fetch QR
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Wait longer for instance to be fully ready before fetching QR
+      // Green API needs time to initialize the instance
+      await new Promise(resolve => setTimeout(resolve, 5000));
       await initializeConnection();
       
     } catch (error: any) {
