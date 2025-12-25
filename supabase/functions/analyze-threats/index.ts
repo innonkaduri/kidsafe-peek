@@ -34,7 +34,10 @@ interface MediaData {
 // Download media and convert to Base64 - with size limit to prevent memory issues
 const MAX_FILE_SIZE = 500 * 1024; // 500KB limit per file (increased from 150KB)
 
-async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
+// Allowed image MIME types for OpenAI Vision API
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+
+async function downloadMediaAsBase64(url: string, requireImageType: boolean = true): Promise<MediaData | null> {
   try {
     console.log(`Downloading media from: ${url}`);
     const response = await fetch(url, {
@@ -56,6 +59,13 @@ async function downloadMediaAsBase64(url: string): Promise<MediaData | null> {
     }
     
     const contentType = response.headers.get("content-type") || "image/jpeg";
+    
+    // Validate MIME type - only allow actual images for OpenAI Vision API
+    if (requireImageType && !ALLOWED_IMAGE_TYPES.some(type => contentType.toLowerCase().startsWith(type))) {
+      console.log(`Skipping non-image MIME type: ${contentType}`);
+      return null;
+    }
+    
     const buffer = await response.arrayBuffer();
     
     // Skip if too large (backup check)
