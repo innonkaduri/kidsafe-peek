@@ -253,6 +253,9 @@ serve(async (req) => {
       console.log("Extracted fileData:", JSON.stringify(fileData));
     }
 
+    // Supported message types for database CHECK CONSTRAINT
+    const VALID_MSG_TYPES = ['text', 'image', 'audio', 'video', 'file', 'sticker', 'reaction', 'quote', 'ptt', 'location', 'contact', 'vcard', 'poll', 'call_log'];
+
     if (typeMessage === "textMessage" && msgData?.textMessageData) {
       msgType = "text";
       textContent = sanitizeText(msgData.textMessageData.textMessage);
@@ -263,10 +266,10 @@ serve(async (req) => {
       // Reply/quote message - extract text from extendedTextMessageData
       msgType = "quote";
       textContent = sanitizeText(msgData.extendedTextMessageData.text);
-    } else if (typeMessage === "reactionMessage" && msgData?.extendedTextMessageData) {
+    } else if (typeMessage === "reactionMessage") {
       // Reaction message (like/emoji)
       msgType = "reaction";
-      textContent = sanitizeText(msgData.extendedTextMessageData.text);
+      textContent = sanitizeText((msgData as any)?.reactionMessageData?.reaction || (msgData as any)?.extendedTextMessageData?.text || "👍");
     } else if (typeMessage === "imageMessage") {
       msgType = "image";
       textContent = sanitizeText(fileData?.caption);
@@ -287,6 +290,11 @@ serve(async (req) => {
       msgType = "audio";
       mediaUrl = fileData?.downloadUrl || null;
       console.log("Audio message - mediaUrl:", mediaUrl);
+    } else if (typeMessage === "pttMessage" || typeMessage === "voiceMessage") {
+      // Push-to-talk / voice message
+      msgType = "ptt";
+      mediaUrl = fileData?.downloadUrl || null;
+      console.log("PTT message - mediaUrl:", mediaUrl);
     } else if (typeMessage === "documentMessage") {
       msgType = "file";
       textContent = sanitizeText(fileData?.fileName || fileData?.caption);
@@ -294,6 +302,32 @@ serve(async (req) => {
     } else if (typeMessage === "stickerMessage") {
       msgType = "sticker";
       mediaUrl = fileData?.downloadUrl || null;
+    } else if (typeMessage === "locationMessage") {
+      msgType = "location";
+      const locData = (msgData as any)?.locationMessageData;
+      textContent = locData ? `${locData.latitude || ""},${locData.longitude || ""}` : "";
+    } else if (typeMessage === "contactMessage" || typeMessage === "vcardMessage" || typeMessage === "contactsArrayMessage") {
+      msgType = "contact";
+      const contactData = (msgData as any)?.contactMessageData || (msgData as any)?.contactsArrayMessageData;
+      textContent = sanitizeText(contactData?.displayName || contactData?.contacts?.[0]?.displayName || "איש קשר");
+    } else if (typeMessage === "pollMessage") {
+      msgType = "poll";
+      const pollData = (msgData as any)?.pollMessageData;
+      textContent = sanitizeText(pollData?.name || "סקר");
+    } else if (typeMessage === "callLogMessage") {
+      msgType = "call_log";
+      textContent = "שיחה";
+    } else {
+      // Unknown type - fallback to text to avoid CHECK CONSTRAINT violation
+      console.log("Unknown message type:", typeMessage, "- saving as text");
+      msgType = "text";
+      textContent = textContent || `[${typeMessage || "הודעה"}]`;
+    }
+
+    // Safety check: ensure msgType is valid (should not happen, but just in case)
+    if (!VALID_MSG_TYPES.includes(msgType)) {
+      console.warn("Invalid msgType after processing:", msgType, "- defaulting to text");
+      msgType = "text";
     }
 
     const senderLabel = sanitizeText(webhookData.senderData.senderName || webhookData.senderData.sender);
