@@ -29,6 +29,7 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
   
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const autoSyncIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const clearIntervals = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -38,6 +39,10 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     if (qrRefreshIntervalRef.current) {
       clearInterval(qrRefreshIntervalRef.current);
       qrRefreshIntervalRef.current = null;
+    }
+    if (autoSyncIntervalRef.current) {
+      clearInterval(autoSyncIntervalRef.current);
+      autoSyncIntervalRef.current = null;
     }
   }, []);
 
@@ -202,7 +207,7 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     }
   };
 
-  const syncMessages = async () => {
+  const syncMessages = useCallback(async (showToast = true) => {
     setSyncing(true);
 
     try {
@@ -216,14 +221,39 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
         throw new Error(data.error);
       }
 
-      toast.success(`נטענו ${data.messagesImported} הודעות מ-${data.chatsProcessed} שיחות`);
+      if (showToast && data.messagesImported > 0) {
+        toast.success(`נטענו ${data.messagesImported} הודעות מ-${data.chatsProcessed} שיחות`);
+      }
       onUpdate();
     } catch (error: any) {
-      toast.error('שגיאה בסנכרון: ' + error.message);
+      if (showToast) {
+        toast.error('שגיאה בסנכרון: ' + error.message);
+      }
+      console.error('Sync error:', error);
     } finally {
       setSyncing(false);
     }
-  };
+  }, [child.id, onUpdate]);
+
+  // Auto-sync when connected
+  useEffect(() => {
+    if (status === 'connected') {
+      // Sync immediately on connect
+      syncMessages(false);
+      
+      // Then sync every 60 seconds
+      autoSyncIntervalRef.current = setInterval(() => {
+        syncMessages(false);
+      }, 60000);
+      
+      return () => {
+        if (autoSyncIntervalRef.current) {
+          clearInterval(autoSyncIntervalRef.current);
+          autoSyncIntervalRef.current = null;
+        }
+      };
+    }
+  }, [status, syncMessages]);
 
   return (
     <div className="space-y-6">
@@ -373,9 +403,9 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
             )}
             {status === 'connected' && (
               <>
-                <Button onClick={syncMessages} variant="glow" size="sm" disabled={syncing}>
+                <Button onClick={() => syncMessages(true)} variant="glow" size="sm" disabled={syncing}>
                   {syncing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : null}
-                  סנכרן הודעות קיימות
+                  סנכרן עכשיו
                 </Button>
                 <Button 
                   onClick={deleteInstance} 
