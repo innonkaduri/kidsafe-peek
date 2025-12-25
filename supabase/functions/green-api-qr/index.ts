@@ -154,21 +154,24 @@ serve(async (req) => {
         );
       }
       
-      // 401 or 400 means invalid credentials - instance was deleted or expired
-      if (qrResponse.status === 401 || qrResponse.status === 400) {
-        console.log("green-api-qr: Instance invalid, clearing credentials");
-        // Clear invalid credentials
+      // 4xx (except 429) means invalid credentials/instance (deleted, expired, not ready)
+      if (qrResponse.status >= 400 && qrResponse.status < 500) {
+        console.log("green-api-qr: Instance invalid (", qrResponse.status, "), clearing credentials");
+
         await supabase
           .from("connector_credentials")
           .delete()
           .eq("child_id", childId);
-        
+
         return new Response(
-          JSON.stringify({ type: "noInstance", message: "Instance expired or invalid, please create a new connection" }),
+          JSON.stringify({
+            type: "noInstance",
+            message: "Instance expired/invalid. Please create a new connection.",
+          }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      
+
       if (!qrResponse.ok) {
         throw new Error(`QR fetch failed: ${qrResponse.status}`);
       }
