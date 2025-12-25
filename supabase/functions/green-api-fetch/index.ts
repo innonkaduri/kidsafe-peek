@@ -223,10 +223,51 @@ serve(async (req) => {
 
         const messages: GreenAPIMessage[] = await messagesResponse.json();
 
+        // Track media fetch count to limit API calls
+        let mediaFetchCount = 0;
+        const MAX_MEDIA_PER_CHAT = 10;
+
         for (const msg of messages) {
-          // Log media info for debugging
+          // Detect message type
           const messageType = msg.typeMessage || msg.type;
-          if (messageType !== "textMessage" && messageType !== "extendedTextMessage") {
+          const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(messageType);
+
+          // For media messages without downloadUrl, fetch it using downloadFile API
+          if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_PER_CHAT && msg.idMessage) {
+            try {
+              console.log(`Fetching downloadUrl for media message ${msg.idMessage} (type: ${messageType})`);
+              
+              const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                  chatId: chat.id, 
+                  idMessage: msg.idMessage 
+                }),
+              });
+
+              if (downloadResponse.ok) {
+                const downloadData = await downloadResponse.json();
+                if (downloadData.downloadUrl) {
+                  msg.downloadUrl = downloadData.downloadUrl;
+                  console.log(`Got downloadUrl for ${msg.idMessage}: ${downloadData.downloadUrl.substring(0, 80)}...`);
+                } else {
+                  console.log(`No downloadUrl in response for ${msg.idMessage}:`, JSON.stringify(downloadData));
+                }
+              } else {
+                console.log(`downloadFile failed for ${msg.idMessage}: ${downloadResponse.status}`);
+              }
+              
+              mediaFetchCount++;
+              // Add delay to prevent rate limiting
+              await new Promise(resolve => setTimeout(resolve, 200));
+            } catch (downloadError) {
+              console.error(`Error fetching downloadUrl for ${msg.idMessage}:`, downloadError);
+            }
+          }
+
+          // Log media info for debugging
+          if (isMediaMessage) {
             console.log(`Media message: type=${messageType}, downloadUrl=${msg.downloadUrl || 'none'}, thumbnail=${msg.jpegThumbnail ? 'yes' : 'no'}`);
           }
 
