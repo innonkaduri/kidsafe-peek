@@ -21,7 +21,7 @@ type ConnectionStatus =
   | 'connected' 
   | 'error';
 
-const CREATION_DURATION_MS = 90000; // 90 seconds
+const CREATION_DURATION_MS = 120000; // 120 seconds = 2 minutes
 
 export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
   const [status, setStatus] = useState<ConnectionStatus>('loading');
