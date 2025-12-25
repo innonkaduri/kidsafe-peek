@@ -259,6 +259,14 @@ serve(async (req) => {
     } else if (typeMessage === "extendedTextMessage" && msgData?.extendedTextMessageData) {
       msgType = "text";
       textContent = sanitizeText(msgData.extendedTextMessageData.text);
+    } else if (typeMessage === "quotedMessage" && msgData?.extendedTextMessageData) {
+      // Reply/quote message - extract text from extendedTextMessageData
+      msgType = "quote";
+      textContent = sanitizeText(msgData.extendedTextMessageData.text);
+    } else if (typeMessage === "reactionMessage" && msgData?.extendedTextMessageData) {
+      // Reaction message (like/emoji)
+      msgType = "reaction";
+      textContent = sanitizeText(msgData.extendedTextMessageData.text);
     } else if (typeMessage === "imageMessage") {
       msgType = "image";
       textContent = sanitizeText(fileData?.caption);
