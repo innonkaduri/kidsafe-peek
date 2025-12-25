@@ -11,3 +11,12 @@ verify_jwt = false
 
 [functions.green-api-fetch]
 verify_jwt = false
+
+[functions.analyze-threats]
+verify_jwt = false
+
+[functions.analyze-media]
+verify_jwt = false
+
+[functions.transcribe-audio]
+verify_jwt = false
