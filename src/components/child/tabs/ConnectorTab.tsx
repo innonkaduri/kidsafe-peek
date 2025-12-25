@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Smartphone, Loader2, CheckCircle, RefreshCw, QrCode, Wifi, WifiOff, Plus, Unplug } from 'lucide-react';
+import { Smartphone, Loader2, CheckCircle, RefreshCw, QrCode, Wifi, WifiOff, Plus, Unplug, Shield } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { Child } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -20,12 +21,16 @@ type ConnectionStatus =
   | 'connected' 
   | 'error';
 
+const CREATION_DURATION_MS = 90000; // 90 seconds
+
 export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
   const [status, setStatus] = useState<ConnectionStatus>('loading');
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [creationProgress, setCreationProgress] = useState(0);
+  const creationTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -43,6 +48,10 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     if (autoSyncIntervalRef.current) {
       clearInterval(autoSyncIntervalRef.current);
       autoSyncIntervalRef.current = null;
+    }
+    if (creationTimerRef.current) {
+      clearInterval(creationTimerRef.current);
+      creationTimerRef.current = null;
     }
   }, []);
 
@@ -151,6 +160,16 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
   const createInstance = async () => {
     setStatus('creating');
     setErrorMessage(null);
+    setCreationProgress(0);
+    
+    // Start progress animation (90 seconds total)
+    const startTime = Date.now();
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min((elapsed / CREATION_DURATION_MS) * 100, 95); // Cap at 95% until done
+      setCreationProgress(progress);
+    }, 100);
+    creationTimerRef.current = progressInterval;
     
     try {
       const { data, error } = await supabase.functions.invoke('green-api-partner', {
@@ -164,18 +183,33 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
       }
 
       if (data.status === 'already_connected') {
+        clearInterval(progressInterval);
+        creationTimerRef.current = null;
+        setCreationProgress(100);
         setStatus('connected');
         toast.success('WhatsApp כבר מחובר!');
         return;
       }
 
+      // Wait for progress to reach completion visually
+      const remainingTime = Math.max(0, CREATION_DURATION_MS - (Date.now() - startTime));
+      if (remainingTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, remainingTime));
+      }
+      
+      clearInterval(progressInterval);
+      creationTimerRef.current = null;
+      setCreationProgress(100);
+      
       toast.success('מופע נוצר בהצלחה! מחכה לסריקת QR...');
       
       // Wait a moment for instance to be ready, then fetch QR
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       await initializeConnection();
       
     } catch (error: any) {
+      clearInterval(progressInterval);
+      creationTimerRef.current = null;
       console.error('Create instance error:', error);
       setErrorMessage(error.message || 'שגיאה ביצירת מופע');
       setStatus('error');
@@ -329,12 +363,32 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
             </div>
           )}
 
-          {/* Creating State */}
+          {/* Creating State - Progress Animation */}
           {status === 'creating' && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="w-12 h-12 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">יוצר מופע WhatsApp חדש...</p>
-              <p className="text-xs text-muted-foreground/60">זה עשוי לקחת כמה שניות</p>
+            <div className="flex flex-col items-center gap-6 py-8">
+              <div className="relative">
+                <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center animate-pulse">
+                  <Shield className="w-10 h-10 text-primary" />
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
+                </div>
+              </div>
+              <div className="text-center space-y-2">
+                <h3 className="font-medium text-foreground">יוצר חיבור מאובטח</h3>
+                <p className="text-sm text-muted-foreground">
+                  מכין את המערכת לקליטת הודעות...
+                </p>
+              </div>
+              <div className="w-full max-w-xs space-y-2">
+                <Progress value={creationProgress} className="h-2" />
+                <p className="text-xs text-muted-foreground/60 text-center">
+                  {creationProgress < 30 && 'מאתחל חיבור...'}
+                  {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
+                  {creationProgress >= 60 && creationProgress < 90 && 'מחבר לשרתים...'}
+                  {creationProgress >= 90 && 'כמעט מוכן...'}
+                </p>
+              </div>
             </div>
           )}
 
