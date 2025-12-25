@@ -21,11 +21,13 @@ interface GreenAPIMessage {
   idMessage: string;
   timestamp: number;
   type: string;
+  typeMessage?: string;
   chatId: string;
   senderId: string;
   senderName: string;
   textMessage?: string;
   caption?: string;
+  fromMe?: boolean;
 }
 
 // Sanitize text to remove invalid UTF-8 sequences
@@ -232,17 +234,23 @@ serve(async (req) => {
           let msgType = "text";
           let textContent = sanitizeText(msg.textMessage || msg.caption || "");
 
-          if (msg.type === "imageMessage") msgType = "image";
-          else if (msg.type === "audioMessage" || msg.type === "pttMessage") msgType = "audio";
-          else if (msg.type === "videoMessage") msgType = "video";
-          else if (msg.type === "documentMessage") msgType = "file";
-          else if (msg.type === "stickerMessage") msgType = "sticker";
+          // Detect message type from type or typeMessage field
+          const messageType = msg.typeMessage || msg.type;
+          if (messageType === "imageMessage") msgType = "image";
+          else if (messageType === "audioMessage" || messageType === "pttMessage") msgType = "audio";
+          else if (messageType === "videoMessage") msgType = "video";
+          else if (messageType === "documentMessage") msgType = "file";
+          else if (messageType === "stickerMessage") msgType = "sticker";
+
+          // Detect outgoing messages: fromMe=true or type="outgoing"
+          const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
+          const senderLabel = isOutgoing ? "אני" : sanitizeText(msg.senderName || msg.senderId);
 
           await supabase.from("messages").insert({
             child_id,
             chat_id: dbChat.id,
-            sender_label: sanitizeText(msg.senderName || msg.senderId),
-            is_child_sender: false,
+            sender_label: senderLabel,
+            is_child_sender: isOutgoing,
             msg_type: msgType,
             message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
             text_content: textContent,
