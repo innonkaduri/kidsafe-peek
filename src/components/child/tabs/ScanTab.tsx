@@ -471,7 +471,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
               </div>
 
               <p className="text-sm text-muted-foreground">
-                <strong>System Prompt:</strong> מוגדר ב-OpenAI Assistant עם ID: <code className="bg-muted px-1 rounded">asst_epnwyX2RqHBRjbDdN4YQIYPs</code>
+                <strong>AI:</strong> הניתוח מופעל באמצעות Lovable AI (Gemini 2.5 Flash)
               </p>
 
               <div className="flex gap-3">

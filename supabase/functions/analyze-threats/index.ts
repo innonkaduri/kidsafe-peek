@@ -181,11 +181,7 @@ serve(async (req) => {
   }
 
   try {
-    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-    if (!OPENAI_API_KEY) {
-      throw new Error("OPENAI_API_KEY is not configured");
-    }
-
+    // Lovable AI Gateway API key is auto-provisioned
     const requestBody = await req.json();
     const { child_id, scan_id, messages }: AnalysisRequest = requestBody;
 
@@ -367,40 +363,57 @@ ${imageParts.length > 0 ? `\nמצורפות ${imageParts.length} תמונות ל
       contentArray.push(img);
     }
 
-    console.log(`Calling OpenAI Chat Completions API with ${imageParts.length} images...`);
+    console.log(`Calling Lovable AI Gateway with ${imageParts.length} images...`);
     
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      throw new Error("LOVABLE_API_KEY is not configured");
+    }
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o", // Vision-capable model
+        model: "google/gemini-2.5-flash", // Vision-capable model
         messages: [
           { role: "system", content: systemInstructions },
           { role: "user", content: contentArray }
         ],
-        max_tokens: 2000,
-        response_format: { type: "json_object" }
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("OpenAI Chat API error:", response.status, errorText);
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+      console.error("Lovable AI Gateway error:", response.status, errorText);
+      
+      if (response.status === 429) {
+        throw new Error("Rate limit exceeded. Please try again later.");
+      }
+      if (response.status === 402) {
+        throw new Error("Payment required. Please add credits to your Lovable AI workspace.");
+      }
+      
+      throw new Error(`AI Gateway error: ${response.status} - ${errorText}`);
     }
 
     const result = await response.json();
-    console.log("OpenAI Chat API result:", JSON.stringify(result, null, 2));
+    console.log("Lovable AI Gateway result:", JSON.stringify(result, null, 2));
 
     // Extract the structured output from the response
     let analysisResult;
     try {
       const outputText = result.choices?.[0]?.message?.content;
       if (outputText) {
-        analysisResult = JSON.parse(outputText);
+        // Try to extract JSON from the response (may be wrapped in markdown code block)
+        let jsonStr = outputText;
+        const jsonMatch = outputText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[1];
+        }
+        analysisResult = JSON.parse(jsonStr);
       } else {
         throw new Error("No output text in response");
       }
