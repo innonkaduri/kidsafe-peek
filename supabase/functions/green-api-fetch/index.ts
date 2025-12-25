@@ -28,6 +28,12 @@ interface GreenAPIMessage {
   caption?: string;
 }
 
+// Sanitize text to remove invalid UTF-8 sequences
+function sanitizeText(text: string | null | undefined): string {
+  if (!text) return "";
+  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 // Helper function to verify user authentication and child ownership
 async function verifyAuthAndOwnership(
   req: Request,
@@ -82,8 +88,24 @@ async function verifyAuthAndOwnership(
   return { userId: user.id };
 }
 
-// Helper function to get Green API credentials
-function getGreenApiCredentials(): { instanceId: string; apiToken: string } | null {
+// Helper function to get Green API credentials for a specific child
+async function getGreenApiCredentials(
+  supabase: any,
+  childId: string
+): Promise<{ instanceId: string; apiToken: string } | null> {
+  // First try to get per-child credentials
+  const { data: cred } = await supabase
+    .from("connector_credentials")
+    .select("instance_id, api_token")
+    .eq("child_id", childId)
+    .eq("status", "authorized")
+    .maybeSingle();
+
+  if (cred && cred.instance_id && cred.api_token) {
+    return { instanceId: cred.instance_id, apiToken: cred.api_token };
+  }
+
+  // Fallback to global credentials (legacy support)
   const instanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
   const apiToken = Deno.env.get("GREEN_API_TOKEN");
 
@@ -109,28 +131,27 @@ serve(async (req) => {
       return authResult;
     }
 
-    const { userId } = authResult;
-
-    // Get Green API credentials
-    const credentials = getGreenApiCredentials();
-    
-    if (!credentials) {
-      console.error("Missing GREEN_API credentials");
-      return new Response(
-        JSON.stringify({ error: "Missing Green API credentials" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const { instanceId, apiToken } = credentials;
-
     // Create service role client for database operations
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Get Green API credentials for this child
+    const credentials = await getGreenApiCredentials(supabase, child_id);
+    
+    if (!credentials) {
+      console.error("No GREEN_API credentials found for child:", child_id);
+      return new Response(
+        JSON.stringify({ error: "WhatsApp not connected. Please connect first." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { instanceId, apiToken } = credentials;
     const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
+
+    console.log("Fetching chats for child:", child_id, "instance:", instanceId);
 
     // Fetch recent chats
     const chatsResponse = await fetch(`${baseUrl}/getChats/${apiToken}`, {
@@ -150,12 +171,14 @@ serve(async (req) => {
 
     for (const chat of chats.slice(0, 20)) { // Limit to 20 most recent chats
       try {
+        const chatName = sanitizeText(chat.name || chat.id);
+
         // Find or create chat in database
         let { data: dbChat } = await supabase
           .from("chats")
           .select("id")
           .eq("child_id", child_id)
-          .eq("chat_name", chat.name || chat.id)
+          .eq("chat_name", chatName)
           .maybeSingle();
 
         if (!dbChat) {
@@ -163,7 +186,7 @@ serve(async (req) => {
             .from("chats")
             .insert({
               child_id,
-              chat_name: chat.name || chat.id,
+              chat_name: chatName,
               participant_count: 2,
               is_group: chat.type === "group",
               last_message_at: chat.lastMessageTime 
@@ -201,23 +224,24 @@ serve(async (req) => {
             .select("id")
             .eq("chat_id", dbChat.id)
             .eq("message_timestamp", new Date(msg.timestamp * 1000).toISOString())
-            .eq("sender_label", msg.senderName || msg.senderId)
+            .eq("sender_label", sanitizeText(msg.senderName || msg.senderId))
             .maybeSingle();
 
           if (existingMsg) continue; // Skip existing messages
 
           let msgType = "text";
-          let textContent = msg.textMessage || msg.caption || "";
+          let textContent = sanitizeText(msg.textMessage || msg.caption || "");
 
           if (msg.type === "imageMessage") msgType = "image";
           else if (msg.type === "audioMessage" || msg.type === "pttMessage") msgType = "audio";
           else if (msg.type === "videoMessage") msgType = "video";
           else if (msg.type === "documentMessage") msgType = "file";
+          else if (msg.type === "stickerMessage") msgType = "sticker";
 
           await supabase.from("messages").insert({
             child_id,
             chat_id: dbChat.id,
-            sender_label: msg.senderName || msg.senderId,
+            sender_label: sanitizeText(msg.senderName || msg.senderId),
             is_child_sender: false,
             msg_type: msgType,
             message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
@@ -233,6 +257,8 @@ serve(async (req) => {
         console.error(`Error processing chat ${chat.id}:`, chatError);
       }
     }
+
+    console.log("Sync complete:", totalChatsProcessed, "chats,", totalMessagesImported, "messages");
 
     return new Response(
       JSON.stringify({

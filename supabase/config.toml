@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.green-api-qr]
 verify_jwt = false
+
+[functions.green-api-partner]
+verify_jwt = false

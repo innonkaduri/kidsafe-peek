@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Smartphone, Loader2, CheckCircle, RefreshCw, QrCode, Wifi, WifiOff } from 'lucide-react';
+import { Smartphone, Loader2, CheckCircle, RefreshCw, QrCode, Wifi, WifiOff, Plus, Unplug } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -12,55 +12,78 @@ interface ConnectorTabProps {
   onUpdate: () => void;
 }
 
-type ConnectionStatus = 'loading' | 'disconnected' | 'waiting_scan' | 'connected' | 'error';
+type ConnectionStatus = 
+  | 'loading' 
+  | 'no_instance' 
+  | 'creating' 
+  | 'waiting_scan' 
+  | 'connected' 
+  | 'error';
 
 export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
   const [status, setStatus] = useState<ConnectionStatus>('loading');
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const checkStatus = useCallback(async () => {
+  const clearIntervals = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (qrRefreshIntervalRef.current) {
+      clearInterval(qrRefreshIntervalRef.current);
+      qrRefreshIntervalRef.current = null;
+    }
+  }, []);
+
+  const checkInstanceStatus = useCallback(async () => {
     try {
-      const { data, error } = await supabase.functions.invoke('green-api-qr', {
-        body: { action: 'status' },
+      const { data, error } = await supabase.functions.invoke('green-api-partner', {
+        body: { action: 'getStatus', child_id: child.id },
       });
 
       if (error) throw error;
 
-      if (data.authorized) {
+      if (!data.hasInstance) {
+        setStatus('no_instance');
+        clearIntervals();
+        return false;
+      }
+
+      if (data.status === 'authorized') {
         setStatus('connected');
         setQrCode(null);
-        // Stop polling when connected
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-        if (qrRefreshIntervalRef.current) {
-          clearInterval(qrRefreshIntervalRef.current);
-          qrRefreshIntervalRef.current = null;
-        }
+        clearIntervals();
         return true;
       }
+
       return false;
     } catch (error) {
       console.error('Status check error:', error);
       return false;
     }
-  }, []);
+  }, [child.id, clearIntervals]);
 
   const fetchQR = useCallback(async () => {
     try {
       setErrorMessage(null);
       
       const { data, error } = await supabase.functions.invoke('green-api-qr', {
-        body: { action: 'qr' },
+        body: { action: 'qr', child_id: child.id },
       });
 
       if (error) throw error;
+
+      if (data.type === 'noInstance') {
+        setStatus('no_instance');
+        clearIntervals();
+        return;
+      }
 
       if (data.type === 'qrCode' && data.message) {
         setQrCode(data.message);
@@ -68,46 +91,115 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
       } else if (data.type === 'alreadyLogged') {
         setStatus('connected');
         setQrCode(null);
+        clearIntervals();
       } else if (data.type === 'error') {
-        setErrorMessage(data.message || 'שגיאה בקבלת QR');
-        setStatus('error');
+        if (!data.rateLimited) {
+          setErrorMessage(data.message || 'שגיאה בקבלת QR');
+        }
       }
     } catch (error: any) {
       console.error('QR fetch error:', error);
       setErrorMessage(error.message || 'שגיאה בחיבור');
-      setStatus('error');
     }
-  }, []);
+  }, [child.id, clearIntervals]);
 
   const initializeConnection = useCallback(async () => {
     setStatus('loading');
+    clearIntervals();
     
-    // First check if already connected
-    const isConnected = await checkStatus();
+    const isConnected = await checkInstanceStatus();
     
     if (!isConnected) {
-      // Fetch QR code
-      await fetchQR();
-      
-      // Start polling for status every 10 seconds (reduced to avoid rate limiting)
-      pollIntervalRef.current = setInterval(checkStatus, 10000);
-      
-      // Refresh QR every 45 seconds (QR codes expire, but avoid rate limiting)
-      qrRefreshIntervalRef.current = setInterval(fetchQR, 45000);
+      // Check if we have an instance
+      const { data } = await supabase.functions.invoke('green-api-partner', {
+        body: { action: 'getStatus', child_id: child.id },
+      });
+
+      if (data?.hasInstance) {
+        // Instance exists but not connected, fetch QR
+        await fetchQR();
+        
+        // Start polling for status every 5 seconds
+        pollIntervalRef.current = setInterval(async () => {
+          const connected = await checkInstanceStatus();
+          if (connected) {
+            clearIntervals();
+          }
+        }, 5000);
+        
+        // Refresh QR every 30 seconds
+        qrRefreshIntervalRef.current = setInterval(fetchQR, 30000);
+      } else {
+        setStatus('no_instance');
+      }
     }
-  }, [checkStatus, fetchQR]);
+  }, [checkInstanceStatus, fetchQR, child.id, clearIntervals]);
 
   useEffect(() => {
     initializeConnection();
     
     return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-      if (qrRefreshIntervalRef.current) clearInterval(qrRefreshIntervalRef.current);
+      clearIntervals();
     };
-  }, [initializeConnection]);
+  }, [initializeConnection, clearIntervals]);
 
-  const handleRefresh = () => {
-    initializeConnection();
+  const createInstance = async () => {
+    setStatus('creating');
+    setErrorMessage(null);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('green-api-partner', {
+        body: { action: 'createInstance', child_id: child.id },
+      });
+
+      if (error) throw error;
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      if (data.status === 'already_connected') {
+        setStatus('connected');
+        toast.success('WhatsApp כבר מחובר!');
+        return;
+      }
+
+      toast.success('מופע נוצר בהצלחה! מחכה לסריקת QR...');
+      
+      // Wait a moment for instance to be ready, then fetch QR
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      await initializeConnection();
+      
+    } catch (error: any) {
+      console.error('Create instance error:', error);
+      setErrorMessage(error.message || 'שגיאה ביצירת מופע');
+      setStatus('error');
+      toast.error('שגיאה ביצירת חיבור: ' + error.message);
+    }
+  };
+
+  const deleteInstance = async () => {
+    setIsDeleting(true);
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('green-api-partner', {
+        body: { action: 'deleteInstance', child_id: child.id },
+      });
+
+      if (error) throw error;
+
+      clearIntervals();
+      setStatus('no_instance');
+      setQrCode(null);
+      toast.success('החיבור נותק בהצלחה');
+      onUpdate();
+      
+    } catch (error: any) {
+      console.error('Delete instance error:', error);
+      toast.error('שגיאה בניתוק: ' + error.message);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const syncMessages = async () => {
@@ -133,29 +225,6 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     }
   };
 
-  // Ensure data source exists for this child
-  useEffect(() => {
-    const ensureDataSource = async () => {
-      const { data: existing } = await supabase
-        .from('data_sources')
-        .select('id')
-        .eq('child_id', child.id)
-        .eq('source_type', 'connector')
-        .maybeSingle();
-
-      if (!existing) {
-        await supabase.from('data_sources').insert({
-          child_id: child.id,
-          source_type: 'connector',
-          status: 'active',
-        });
-      }
-    };
-    ensureDataSource();
-  }, [child.id]);
-
-  const webhookUrl = `https://qhsvmfnjoowexmyaqgrr.supabase.co/functions/v1/green-api-webhook`;
-
   return (
     <div className="space-y-6">
       <Card className="glass-card">
@@ -165,7 +234,9 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
             חיבור WhatsApp
           </CardTitle>
           <CardDescription>
-            סרקו את הקוד עם WhatsApp לחיבור המכשיר
+            {status === 'no_instance' 
+              ? 'צרו חיבור WhatsApp חדש למעקב אחר ההודעות'
+              : 'סרקו את הקוד עם WhatsApp לחיבור המכשיר'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -176,6 +247,18 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
               <Badge variant="secondary" className="gap-1">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 בודק...
+              </Badge>
+            )}
+            {status === 'no_instance' && (
+              <Badge variant="secondary" className="gap-1">
+                <WifiOff className="w-3 h-3" />
+                לא מוגדר
+              </Badge>
+            )}
+            {status === 'creating' && (
+              <Badge variant="secondary" className="gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                יוצר חיבור...
               </Badge>
             )}
             {status === 'connected' && (
@@ -190,18 +273,40 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
                 ממתין לסריקה
               </Badge>
             )}
-            {status === 'disconnected' && (
-              <Badge variant="secondary" className="gap-1">
-                <WifiOff className="w-3 h-3" />
-                לא מחובר
-              </Badge>
-            )}
             {status === 'error' && (
               <Badge variant="destructive" className="gap-1">
                 שגיאה
               </Badge>
             )}
           </div>
+
+          {/* No Instance State - Create Button */}
+          {status === 'no_instance' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <div className="w-20 h-20 rounded-full bg-muted flex items-center justify-center">
+                <Smartphone className="w-10 h-10 text-muted-foreground" />
+              </div>
+              <div className="text-center space-y-2">
+                <h3 className="font-medium text-foreground">אין חיבור WhatsApp</h3>
+                <p className="text-sm text-muted-foreground">
+                  צרו חיבור חדש כדי להתחיל לקבל הודעות
+                </p>
+              </div>
+              <Button onClick={createInstance} variant="glow" className="gap-2">
+                <Plus className="w-4 h-4" />
+                צור חיבור WhatsApp
+              </Button>
+            </div>
+          )}
+
+          {/* Creating State */}
+          {status === 'creating' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Loader2 className="w-12 h-12 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">יוצר מופע WhatsApp חדש...</p>
+              <p className="text-xs text-muted-foreground/60">זה עשוי לקחת כמה שניות</p>
+            </div>
+          )}
 
           {/* QR Code Display */}
           {status === 'waiting_scan' && qrCode && (
@@ -218,9 +323,17 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
                   פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
                 </p>
                 <p className="text-xs text-muted-foreground/60">
-                  הקוד מתרענן אוטומטית כל 45 שניות
+                  הקוד מתרענן אוטומטית כל 30 שניות
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Loading State */}
+          {status === 'loading' && (
+            <div className="flex flex-col items-center gap-4 py-8">
+              <Loader2 className="w-12 h-12 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">בודק סטטוס חיבור...</p>
             </div>
           )}
 
@@ -239,19 +352,11 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
             </div>
           )}
 
-          {/* Loading State */}
-          {status === 'loading' && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="w-12 h-12 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">מתחבר...</p>
-            </div>
-          )}
-
           {/* Error State */}
           {status === 'error' && (
             <div className="text-center py-8 space-y-4">
               <p className="text-sm text-destructive">{errorMessage}</p>
-              <Button onClick={handleRefresh} variant="outline">
+              <Button onClick={initializeConnection} variant="outline">
                 <RefreshCw className="w-4 h-4 ml-2" />
                 נסה שוב
               </Button>
@@ -260,38 +365,45 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-2 pt-4 border-t border-border">
-            {status !== 'loading' && (
-              <Button onClick={handleRefresh} variant="outline" size="sm">
+            {status !== 'loading' && status !== 'creating' && status !== 'no_instance' && (
+              <Button onClick={initializeConnection} variant="outline" size="sm">
                 <RefreshCw className="w-4 h-4 ml-2" />
                 רענן
               </Button>
             )}
             {status === 'connected' && (
-              <Button onClick={syncMessages} variant="glow" size="sm" disabled={syncing}>
-                {syncing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : null}
-                סנכרן הודעות קיימות
+              <>
+                <Button onClick={syncMessages} variant="glow" size="sm" disabled={syncing}>
+                  {syncing ? <Loader2 className="w-4 h-4 ml-2 animate-spin" /> : null}
+                  סנכרן הודעות קיימות
+                </Button>
+                <Button 
+                  onClick={deleteInstance} 
+                  variant="destructive" 
+                  size="sm" 
+                  disabled={isDeleting}
+                  className="gap-1"
+                >
+                  {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+                  נתק
+                </Button>
+              </>
+            )}
+            {status === 'waiting_scan' && (
+              <Button 
+                onClick={deleteInstance} 
+                variant="destructive" 
+                size="sm" 
+                disabled={isDeleting}
+                className="gap-1"
+              >
+                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unplug className="w-4 h-4" />}
+                בטל
               </Button>
             )}
           </div>
         </CardContent>
       </Card>
-
-      {/* Webhook Info - Only show when connected */}
-      {status === 'connected' && (
-        <Card className="glass-card">
-          <CardHeader>
-            <CardTitle className="text-sm text-foreground">הגדרות Webhook</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-xs text-muted-foreground">
-              הגדירו את הכתובת הזו ב-Green API Console לקבלת הודעות בזמן אמת:
-            </p>
-            <code className="block p-3 bg-muted rounded-lg text-xs break-all text-foreground" dir="ltr">
-              {webhookUrl}
-            </code>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
