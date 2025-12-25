@@ -22,15 +22,15 @@ interface GreenAPIMessage {
     typeInstance: string;
   };
   timestamp: number;
-  idMessage: string;
-  senderData: {
+  idMessage?: string;
+  senderData?: {
     chatId: string;
     chatName: string;
     sender: string;
     senderName: string;
     senderContactName?: string;
   };
-  messageData: {
+  messageData?: {
     typeMessage: string;
     textMessageData?: {
       textMessage: string;
@@ -44,6 +44,14 @@ interface GreenAPIMessage {
     documentMessage?: FileMessageData;
     fileMessageData?: FileMessageData;
   };
+  stateInstance?: string; // For state webhooks
+}
+
+// Sanitize text to remove invalid UTF-8 sequences (broken surrogates)
+function sanitizeText(text: string | null | undefined): string {
+  if (!text) return "";
+  // Remove unpaired surrogates which cause PostgreSQL JSON errors
+  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
 serve(async (req) => {
@@ -58,7 +66,66 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // Get child_id from query params (for multi-instance setup)
+    const url = new URL(req.url);
+    const childIdFromQuery = url.searchParams.get("child_id");
+
     const webhookData: GreenAPIMessage = await req.json();
+    const instanceId = webhookData.instanceData.idInstance.toString();
+
+    console.log("Webhook received:", webhookData.typeWebhook, "instance:", instanceId);
+
+    // Handle state change webhooks (connection status)
+    if (webhookData.typeWebhook === "stateInstanceChanged") {
+      const newState = webhookData.stateInstance;
+      console.log("State changed to:", newState, "for instance:", instanceId);
+
+      // Find the credential for this instance
+      const { data: cred } = await supabase
+        .from("connector_credentials")
+        .select("id, child_id, status")
+        .eq("instance_id", instanceId)
+        .maybeSingle();
+
+      if (cred) {
+        if (newState === "authorized") {
+          // Update status to authorized
+          await supabase
+            .from("connector_credentials")
+            .update({ status: "authorized", last_checked_at: new Date().toISOString() })
+            .eq("id", cred.id);
+          console.log("Updated status to authorized for child:", cred.child_id);
+        } else if (newState === "notAuthorized" || newState === "sleeping") {
+          // WhatsApp disconnected - delete the instance
+          console.log("Instance disconnected, deleting for child:", cred.child_id);
+          
+          // Delete from partner API
+          const partnerToken = Deno.env.get("GREEN_API_PARTNER_TOKEN");
+          const partnerUrl = Deno.env.get("GREEN_API_PARTNER_URL") || "https://api.green-api.com";
+          
+          if (partnerToken) {
+            try {
+              await fetch(`${partnerUrl}/partner/deleteInstanceAccount/${partnerToken}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ idInstance: parseInt(instanceId) }),
+              });
+              console.log("Instance deleted from Green API");
+            } catch (e) {
+              console.error("Failed to delete instance from Green API:", e);
+            }
+          }
+
+          // Delete credential from DB
+          await supabase.from("connector_credentials").delete().eq("id", cred.id);
+          console.log("Credential deleted from DB");
+        }
+      }
+
+      return new Response(JSON.stringify({ status: "state_processed" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Only process incoming messages
     if (webhookData.typeWebhook !== "incomingMessageReceived") {
@@ -67,63 +134,42 @@ serve(async (req) => {
       });
     }
 
-    const instanceId = webhookData.instanceData.idInstance.toString();
+    // Find the child for this instance
+    let childId: string | null = childIdFromQuery;
 
-    // Find the data source and child associated with this instance
-    // First try to match by instance_id in connector_credentials (per-child credentials)
-    let childId: string | null = null;
-    
-    const { data: credential } = await supabase
-      .from("connector_credentials")
-      .select(`
-        id,
-        data_source_id,
-        data_sources!inner(
-          id,
-          child_id
-        )
-      `)
-      .eq("instance_id", instanceId)
-      .maybeSingle();
-
-    if (credential) {
-      childId = (credential.data_sources as any).child_id;
-    } else {
-      // Fallback: check if this matches our global instance
-      const expectedInstanceId = Deno.env.get("GREEN_API_INSTANCE_ID");
-      
-      if (expectedInstanceId && instanceId !== expectedInstanceId) {
-        // This webhook is from an unknown instance - reject it
-        console.error("Webhook from unknown instance:", instanceId);
-        return new Response(JSON.stringify({ status: "unknown_instance" }), {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      
-      // For global instance, find any child with connector data source
-      const { data: anyDataSource } = await supabase
-        .from("data_sources")
+    if (!childId) {
+      // Look up by instance_id in connector_credentials
+      const { data: cred } = await supabase
+        .from("connector_credentials")
         .select("child_id")
-        .eq("source_type", "connector")
-        .limit(1)
+        .eq("instance_id", instanceId)
         .maybeSingle();
-      
-      if (anyDataSource) {
-        childId = anyDataSource.child_id;
+
+      if (cred) {
+        childId = cred.child_id;
       }
     }
 
     if (!childId) {
-      console.error("No child found for this instance");
+      console.error("No child found for instance:", instanceId);
       return new Response(JSON.stringify({ status: "no_child" }), {
+        status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const chatName = webhookData.senderData.senderContactName || 
-                     webhookData.senderData.senderName || 
-                     webhookData.senderData.chatName;
+    if (!webhookData.senderData) {
+      console.error("No sender data in webhook");
+      return new Response(JSON.stringify({ status: "no_sender_data" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const chatName = sanitizeText(
+      webhookData.senderData.senderContactName || 
+      webhookData.senderData.senderName || 
+      webhookData.senderData.chatName
+    );
     const chatId = webhookData.senderData.chatId;
 
     // Find or create chat
@@ -163,33 +209,32 @@ serve(async (req) => {
     const msgData = webhookData.messageData;
     const typeMessage = msgData?.typeMessage;
 
-    // Green API sends file payloads under the specific *Message field (not consistently under fileMessageData)
     const getFileData = (): FileMessageData | undefined => {
-      if (typeMessage === "imageMessage") return msgData.imageMessage;
-      if (typeMessage === "videoMessage") return msgData.videoMessage;
-      if (typeMessage === "audioMessage") return msgData.audioMessage;
-      if (typeMessage === "documentMessage") return msgData.documentMessage;
-      return msgData.fileMessageData;
+      if (typeMessage === "imageMessage") return msgData?.imageMessage;
+      if (typeMessage === "videoMessage") return msgData?.videoMessage;
+      if (typeMessage === "audioMessage") return msgData?.audioMessage;
+      if (typeMessage === "documentMessage") return msgData?.documentMessage;
+      return msgData?.fileMessageData;
     };
 
     const fileData = getFileData();
 
-    if (typeMessage === "textMessage" && msgData.textMessageData) {
+    if (typeMessage === "textMessage" && msgData?.textMessageData) {
       msgType = "text";
-      textContent = msgData.textMessageData.textMessage;
-    } else if (typeMessage === "extendedTextMessage" && msgData.extendedTextMessageData) {
+      textContent = sanitizeText(msgData.textMessageData.textMessage);
+    } else if (typeMessage === "extendedTextMessage" && msgData?.extendedTextMessageData) {
       msgType = "text";
-      textContent = msgData.extendedTextMessageData.text;
+      textContent = sanitizeText(msgData.extendedTextMessageData.text);
     } else if (typeMessage === "imageMessage") {
       msgType = "image";
-      textContent = fileData?.caption || "";
+      textContent = sanitizeText(fileData?.caption);
       mediaUrl = fileData?.downloadUrl || null;
       mediaThumbnailUrl = fileData?.jpegThumbnail
         ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
         : null;
     } else if (typeMessage === "videoMessage") {
       msgType = "video";
-      textContent = fileData?.caption || "";
+      textContent = sanitizeText(fileData?.caption);
       mediaUrl = fileData?.downloadUrl || null;
       mediaThumbnailUrl = fileData?.jpegThumbnail
         ? `data:image/jpeg;base64,${fileData.jpegThumbnail}`
@@ -199,27 +244,28 @@ serve(async (req) => {
       mediaUrl = fileData?.downloadUrl || null;
     } else if (typeMessage === "documentMessage") {
       msgType = "file";
-      textContent = fileData?.fileName || fileData?.caption || "";
+      textContent = sanitizeText(fileData?.fileName || fileData?.caption);
       mediaUrl = fileData?.downloadUrl || null;
     } else if (typeMessage === "stickerMessage") {
       msgType = "sticker";
       mediaUrl = fileData?.downloadUrl || null;
     }
 
+    const senderLabel = sanitizeText(webhookData.senderData.senderName || webhookData.senderData.sender);
+
     const payload = {
       child_id: childId,
       chat_id: chat.id,
-      sender_label: webhookData.senderData.senderName || webhookData.senderData.sender,
-      is_child_sender: false, // incoming messages are not from the child
+      sender_label: senderLabel,
+      is_child_sender: false,
       msg_type: msgType,
       message_timestamp: new Date(webhookData.timestamp * 1000).toISOString(),
       text_content: textContent,
-      text_excerpt: (textContent || "").slice(0, 100),
+      text_excerpt: textContent.slice(0, 100),
       media_url: mediaUrl,
       media_thumbnail_url: mediaThumbnailUrl,
     };
 
-    // Insert as an array to avoid intermittent "Empty or invalid json" issues seen in PostgREST
     const { error: msgError } = await supabase.from("messages").insert([payload]);
 
     if (msgError) {
@@ -232,6 +278,8 @@ serve(async (req) => {
       .from("chats")
       .update({ last_message_at: new Date(webhookData.timestamp * 1000).toISOString() })
       .eq("id", chat.id);
+
+    console.log("Message saved for child:", childId);
 
     return new Response(JSON.stringify({ status: "ok" }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

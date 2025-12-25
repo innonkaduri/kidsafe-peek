@@ -142,30 +142,46 @@ export type Database = {
       }
       connector_credentials: {
         Row: {
+          api_token: string | null
+          child_id: string | null
           created_at: string | null
           data_source_id: string
           id: string
           instance_id: string | null
           last_checked_at: string | null
+          status: string | null
           token_encrypted: string | null
         }
         Insert: {
+          api_token?: string | null
+          child_id?: string | null
           created_at?: string | null
           data_source_id: string
           id?: string
           instance_id?: string | null
           last_checked_at?: string | null
+          status?: string | null
           token_encrypted?: string | null
         }
         Update: {
+          api_token?: string | null
+          child_id?: string | null
           created_at?: string | null
           data_source_id?: string
           id?: string
           instance_id?: string | null
           last_checked_at?: string | null
+          status?: string | null
           token_encrypted?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "connector_credentials_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "connector_credentials_data_source_id_fkey"
             columns: ["data_source_id"]
