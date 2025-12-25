@@ -1,13 +1,12 @@
-import { useState } from 'react';
-import { Scan as ScanIcon, Clock, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Scan as ScanIcon, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Child, LookbackWindow } from '@/types/database';
+import { Child } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
@@ -16,22 +15,10 @@ interface ScanTabProps {
   onScanComplete: () => void;
 }
 
-const lookbackLabels: Record<LookbackWindow, string> = {
-  '24h': '24 שעות אחרונות',
-  '7d': '7 ימים אחרונים',
-  '30d': '30 ימים אחרונים',
-};
-
-const lookbackHours: Record<LookbackWindow, number> = {
-  '24h': 24,
-  '7d': 24 * 7,
-  '30d': 24 * 30,
-};
-
 export function ScanTab({ child, onScanComplete }: ScanTabProps) {
-  const [lookback, setLookback] = useState<LookbackWindow>('7d');
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [promptPreview, setPromptPreview] = useState<{
     userPrompt: string;
     messagesCount: number;
@@ -46,8 +33,25 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     patternsCount: number;
   } | null>(null);
 
+  // Fetch last scan date
+  useEffect(() => {
+    const fetchLastScan = async () => {
+      const { data } = await supabase
+        .from('scans')
+        .select('finished_at')
+        .eq('child_id', child.id)
+        .eq('status', 'completed')
+        .order('finished_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      setLastScanAt(data?.finished_at ?? null);
+    };
+    fetchLastScan();
+  }, [child.id]);
+
   // Build the prompt (same logic as edge function)
-  const buildPrompt = (messages: any[], lookbackWindow: LookbackWindow) => {
+  const buildPrompt = (messages: any[]) => {
     const limitedMessages = messages.slice(-50);
 
     const formattedMessages = limitedMessages.map((msg) => {
@@ -71,21 +75,38 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
       };
     });
 
-    const lookbackLabel =
-      lookbackWindow === '24h'
-        ? '24 שעות אחרונות'
-        : lookbackWindow === '7d'
-          ? '7 ימים אחרונים'
-          : '30 ימים אחרונים';
+    const userPrompt = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
 
-    const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
+המטרה שלך:
+לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
 
-טווח ניתוח: ${lookbackLabel}
+❗ חשוב מאוד:
+אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
+עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
+
+סוגי סיכון שמותר לזהות:
+- חרם, השפלה מתמשכת או אלימות רגשית קשה
+- איומים פיזיים מפורשים
+- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
+- סמים, אלכוהול או שידול לשימוש
+- פגיעה עצמית או עידוד לפגיעה עצמית
+- סחיטה, איום או מניפולציה מסוכנת
+
+❌ אסור להתריע על:
+- שיח יומיומי, בדיחות, קללות קלות
+- פוליטיקה, חדשות, דעות
+- ויכוחים רגילים
+- שפה בוטה בלי איום ממשי
+- תוכן לא נעים אך לא מסוכן
 
 הודעות לניתוח:
 ${JSON.stringify(formattedMessages, null, 2)}
 
-החזר תשובה בפורמט JSON בלבד עם המבנה הבא:
+---
+
+📤 החזר **JSON בלבד**, בלי טקסט חופשי, בלי הסברים מסביב.
+
+מבנה החזרה מחייב:
 {
   "threatDetected": boolean,
   "riskLevel": "low" | "medium" | "high" | "critical" | null,
@@ -107,6 +128,16 @@ ${JSON.stringify(formattedMessages, null, 2)}
     }
   ],
   "explanation": string
+}
+
+אם אין סיכון ממשי → החזר:
+{
+  "threatDetected": false,
+  "riskLevel": null,
+  "threatTypes": [],
+  "triggers": [],
+  "patterns": [],
+  "explanation": "לא זוהה סיכון ממשי"
 }`;
 
     const oldestMessageAt = limitedMessages[0]?.message_timestamp ?? null;
@@ -123,12 +154,8 @@ ${JSON.stringify(formattedMessages, null, 2)}
 
   const previewPrompt = async () => {
     try {
-      // Calculate lookback date
-      const lookbackDate = new Date();
-      lookbackDate.setHours(lookbackDate.getHours() - lookbackHours[lookback]);
-
-      // Fetch messages for analysis
-      const { data: messages, error: messagesError } = await supabase
+      // Fetch messages since last scan (or all if no scan)
+      let query = supabase
         .from('messages')
         .select(`
           id,
@@ -142,8 +169,13 @@ ${JSON.stringify(formattedMessages, null, 2)}
           chats!inner(chat_name)
         `)
         .eq('child_id', child.id)
-        .gte('message_timestamp', lookbackDate.toISOString())
         .order('message_timestamp', { ascending: true });
+
+      if (lastScanAt) {
+        query = query.gt('message_timestamp', lastScanAt);
+      }
+
+      const { data: messages, error: messagesError } = await query;
 
       if (messagesError) throw messagesError;
 
@@ -159,7 +191,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
         chat_name: msg.chats?.chat_name,
       }));
 
-      const prompt = buildPrompt(formattedMessages, lookback);
+      const prompt = buildPrompt(formattedMessages);
       setPromptPreview(prompt);
     } catch (error: any) {
       console.error('Error building preview:', error);
@@ -179,7 +211,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
         .from('scans')
         .insert({
           child_id: child.id,
-          lookback_window: lookback,
+          lookback_window: 'since_last_scan',
           status: 'running',
           started_at: new Date().toISOString(),
         })
@@ -190,12 +222,8 @@ ${JSON.stringify(formattedMessages, null, 2)}
 
       setProgress(10);
 
-      // Calculate lookback date
-      const lookbackDate = new Date();
-      lookbackDate.setHours(lookbackDate.getHours() - lookbackHours[lookback]);
-
-      // Fetch messages for analysis
-      const { data: messages, error: messagesError } = await supabase
+      // Fetch messages since last scan (or all if no scan)
+      let query = supabase
         .from('messages')
         .select(`
           id,
@@ -209,8 +237,13 @@ ${JSON.stringify(formattedMessages, null, 2)}
           chats!inner(chat_name)
         `)
         .eq('child_id', child.id)
-        .gte('message_timestamp', lookbackDate.toISOString())
         .order('message_timestamp', { ascending: true });
+
+      if (lastScanAt) {
+        query = query.gt('message_timestamp', lastScanAt);
+      }
+
+      const { data: messages, error: messagesError } = await query;
 
       if (messagesError) throw messagesError;
 
@@ -240,7 +273,6 @@ ${JSON.stringify(formattedMessages, null, 2)}
             child_id: child.id,
             scan_id: scan.id,
             messages: formattedMessages,
-            lookback_window: lookback,
           },
         }
       );
@@ -358,35 +390,15 @@ ${JSON.stringify(formattedMessages, null, 2)}
         <CardContent className="space-y-6">
           {!scanning && !result && !promptPreview && (
             <>
-              <div className="space-y-4">
-                <Label className="text-base font-heebo">בחרו טווח זמן לסריקה:</Label>
-                <RadioGroup
-                  value={lookback}
-                  onValueChange={(v) => setLookback(v as LookbackWindow)}
-                  className="grid grid-cols-3 gap-4"
-                >
-                  {(['24h', '7d', '30d'] as LookbackWindow[]).map((window) => (
-                    <div key={window}>
-                      <RadioGroupItem
-                        value={window}
-                        id={window}
-                        className="peer sr-only"
-                      />
-                      <Label
-                        htmlFor={window}
-                        className="flex flex-col items-center justify-center rounded-xl border-2 border-border bg-secondary/50 p-4 hover:bg-secondary cursor-pointer peer-data-[state=checked]:border-primary peer-data-[state=checked]:bg-primary/10 transition-all"
-                      >
-                        <Clock className="w-6 h-6 mb-2" />
-                        <span className="font-medium">{lookbackLabels[window]}</span>
-                      </Label>
-                    </div>
-                  ))}
-                </RadioGroup>
-              </div>
-
-              <div className="glass-card p-4 rounded-xl">
+              <div className="glass-card p-4 rounded-xl space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  <strong className="text-foreground">ניתוח AI:</strong> הסריקה משתמשת ב-Gemini AI לזיהוי דפוסים מסוכנים כמו הטרדות, לחצים, ובקשות לא הולמות.
+                  <strong className="text-foreground">ניתוח AI:</strong> הסריקה משתמשת ב-AI לזיהוי סיכונים חמורים בלבד כמו חרם, איומים, הטרדה מינית, ופגיעה עצמית.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  <strong className="text-foreground">טווח סריקה:</strong>{' '}
+                  {lastScanAt 
+                    ? `הודעות מאז ${new Date(lastScanAt).toLocaleString('he-IL')}`
+                    : 'כל ההודעות (סריקה ראשונה)'}
                 </p>
               </div>
 
