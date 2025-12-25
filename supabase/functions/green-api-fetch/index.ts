@@ -28,6 +28,10 @@ interface GreenAPIMessage {
   textMessage?: string;
   caption?: string;
   fromMe?: boolean;
+  // Media fields
+  downloadUrl?: string;
+  jpegThumbnail?: string;
+  fileName?: string;
 }
 
 // Sanitize text to remove invalid UTF-8 sequences
@@ -255,6 +259,8 @@ serve(async (req) => {
             message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
             text_content: textContent,
             text_excerpt: textContent.substring(0, 100),
+            media_url: msg.downloadUrl || null,
+            media_thumbnail_url: msg.jpegThumbnail || null,
           });
 
           totalMessagesImported++;
