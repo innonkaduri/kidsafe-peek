@@ -33,7 +33,7 @@ interface MediaAnalysisResult {
   confidence: number;
 }
 
-const ASSISTANT_ID = "asst_epnwyX2RqHBRjbDdN4YQIYPs";
+const ASSISTANT_ID = "asst_14lLHth8XD53y5s5GctIHUBx";
 
 // Helper function to verify user authentication and child ownership
 async function verifyAuthAndOwnership(
