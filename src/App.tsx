@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { RoleProvider } from "@/hooks/useRole";
+import { BackgroundSync } from "@/components/BackgroundSync";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
 import ChildProfile from "./pages/ChildProfile";
@@ -26,6 +27,7 @@ const App = () => (
         <TooltipProvider>
           <Toaster />
           <Sonner />
+          <BackgroundSync />
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Dashboard />} />
