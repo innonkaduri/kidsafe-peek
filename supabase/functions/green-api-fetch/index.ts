@@ -123,6 +123,8 @@ async function getGreenApiCredentials(
 }
 
 serve(async (req) => {
+  console.log("=== green-api-fetch v4: downloadFile enabled with debug ===");
+  
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -130,6 +132,7 @@ serve(async (req) => {
 
   try {
     const { child_id }: FetchRequest = await req.json();
+    console.log("Starting sync for child:", child_id);
 
     // Verify authentication and child ownership
     const authResult = await verifyAuthAndOwnership(req, child_id);
@@ -156,6 +159,7 @@ serve(async (req) => {
 
     const { instanceId, apiToken } = credentials;
     const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
+    console.log("Using Green API instance:", instanceId);
 
     console.log("Fetching chats for child:", child_id, "instance:", instanceId);
 
@@ -223,52 +227,69 @@ serve(async (req) => {
 
         const messages: GreenAPIMessage[] = await messagesResponse.json();
 
-        // Track media fetch count to limit API calls
+        // Track media fetch count to limit API calls - increased limit for better coverage
         let mediaFetchCount = 0;
-        const MAX_MEDIA_PER_CHAT = 10;
+        const MAX_MEDIA_PER_CHAT = 50;
+        let debugLogCount = 0;
+
+        console.log(`Processing ${messages.length} messages for chat ${chat.id}`);
 
         for (const msg of messages) {
           // Detect message type
           const messageType = msg.typeMessage || msg.type;
           const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(messageType);
 
+          // Debug log first 3 media messages per chat
+          if (isMediaMessage && debugLogCount < 3) {
+            console.log(`DEBUG media msg: type=${messageType}, idMessage=${msg.idMessage || 'MISSING'}, chatId=${msg.chatId || 'MISSING'}, downloadUrl=${msg.downloadUrl || 'MISSING'}, keys=${Object.keys(msg).join(',')}`);
+            debugLogCount++;
+          }
+
           // For media messages without downloadUrl, fetch it using downloadFile API
           if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_PER_CHAT && msg.idMessage) {
             try {
-              console.log(`Fetching downloadUrl for media message ${msg.idMessage} (type: ${messageType})`);
+              // Use msg.chatId if available, fallback to chat.id
+              const chatIdForDownload = msg.chatId || chat.id;
+              console.log(`Fetching downloadUrl for ${msg.idMessage} (type: ${messageType}, chatId: ${chatIdForDownload})`);
               
               const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
-                  chatId: chat.id, 
+                  chatId: chatIdForDownload, 
                   idMessage: msg.idMessage 
                 }),
               });
 
+              const responseText = await downloadResponse.text();
+              
               if (downloadResponse.ok) {
-                const downloadData = await downloadResponse.json();
-                if (downloadData.downloadUrl) {
-                  msg.downloadUrl = downloadData.downloadUrl;
-                  console.log(`Got downloadUrl for ${msg.idMessage}: ${downloadData.downloadUrl.substring(0, 80)}...`);
-                } else {
-                  console.log(`No downloadUrl in response for ${msg.idMessage}:`, JSON.stringify(downloadData));
+                try {
+                  const downloadData = JSON.parse(responseText);
+                  if (downloadData.downloadUrl) {
+                    msg.downloadUrl = downloadData.downloadUrl;
+                    console.log(`SUCCESS: Got downloadUrl for ${msg.idMessage}: ${downloadData.downloadUrl.substring(0, 100)}...`);
+                  } else {
+                    console.log(`No downloadUrl in response for ${msg.idMessage}. Response:`, responseText.substring(0, 200));
+                  }
+                } catch (parseError) {
+                  console.log(`Failed to parse downloadFile response for ${msg.idMessage}:`, responseText.substring(0, 200));
                 }
               } else {
-                console.log(`downloadFile failed for ${msg.idMessage}: ${downloadResponse.status}`);
+                console.log(`downloadFile API failed for ${msg.idMessage}: status=${downloadResponse.status}, body=${responseText.substring(0, 200)}`);
               }
               
               mediaFetchCount++;
               // Add delay to prevent rate limiting
-              await new Promise(resolve => setTimeout(resolve, 200));
+              await new Promise(resolve => setTimeout(resolve, 150));
             } catch (downloadError) {
               console.error(`Error fetching downloadUrl for ${msg.idMessage}:`, downloadError);
             }
           }
 
-          // Log media info for debugging
+          // Log media result
           if (isMediaMessage) {
-            console.log(`Media message: type=${messageType}, downloadUrl=${msg.downloadUrl || 'none'}, thumbnail=${msg.jpegThumbnail ? 'yes' : 'no'}`);
+            console.log(`Media result: type=${messageType}, hasUrl=${!!msg.downloadUrl}, hasThumbnail=${!!msg.jpegThumbnail}`);
           }
 
           // Check if message already exists
