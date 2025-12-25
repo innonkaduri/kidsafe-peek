@@ -33,8 +33,6 @@ interface MediaAnalysisResult {
   confidence: number;
 }
 
-const ASSISTANT_ID = "asst_14lLHth8XD53y5s5GctIHUBx";
-
 // Helper function to verify user authentication and child ownership
 async function verifyAuthAndOwnership(
   req: Request,
@@ -98,7 +96,6 @@ serve(async (req) => {
       throw new Error("OPENAI_API_KEY is not configured");
     }
 
-    // Clone request to read body twice (once for auth, once for processing)
     const requestBody = await req.json();
     const { child_id, scan_id, messages }: AnalysisRequest = requestBody;
 
@@ -175,7 +172,6 @@ serve(async (req) => {
       let content = msg.text_content || "";
       
       if (mediaAnalysis) {
-        // Format based on media type
         if (msg.msg_type === "audio") {
           content = `[הודעה קולית - תמלול: ${mediaAnalysis.detected_text || mediaAnalysis.description}]`;
         } else if (msg.msg_type === "video") {
@@ -212,7 +208,8 @@ serve(async (req) => {
       };
     });
 
-    const userPrompt = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
+    // System instructions for the AI
+    const systemInstructions = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
 
 המטרה שלך:
 לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
@@ -234,187 +231,115 @@ serve(async (req) => {
 - פוליטיקה, חדשות, דעות
 - ויכוחים רגילים
 - שפה בוטה בלי איום ממשי
-- תוכן לא נעים אך לא מסוכן
+- תוכן לא נעים אך לא מסוכן`;
 
-הודעות לניתוח:
+    const userPrompt = `הודעות לניתוח:
 ${JSON.stringify(formattedMessages, null, 2)}
 
----
+נתח את ההודעות וזהה סיכונים לפי ההנחיות.`;
 
-📤 החזר **JSON בלבד**, בלי טקסט חופשי, בלי הסברים מסביב.
-
-מבנה החזרה מחייב:
-{
-  "threatDetected": boolean,
-  "riskLevel": "low" | "medium" | "high" | "critical" | null,
-  "threatTypes": string[],
-  "triggers": [
-    {
-      "messageId": string,
-      "type": "text" | "image" | "audio",
-      "preview": string,
-      "confidence": number
-    }
-  ],
-  "patterns": [
-    {
-      "chatId": string,
-      "patternType": string,
-      "description": string,
-      "confidence": number
-    }
-  ],
-  "explanation": string
-}
-
-אם אין סיכון ממשי → החזר:
-{
-  "threatDetected": false,
-  "riskLevel": null,
-  "threatTypes": [],
-  "triggers": [],
-  "patterns": [],
-  "explanation": "לא זוהה סיכון ממשי"
-}`;
-
-    // Step 1: Create a thread
-    const threadResponse = await fetch("https://api.openai.com/v1/threads", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "assistants=v2",
-      },
-      body: JSON.stringify({}),
-    });
-
-    if (!threadResponse.ok) {
-      const errorText = await threadResponse.text();
-      console.error("Failed to create thread:", errorText);
-      throw new Error(`Failed to create thread: ${threadResponse.status}`);
-    }
-
-    const thread = await threadResponse.json();
-
-    // Step 2: Add message to thread
-    const messageResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "assistants=v2",
-      },
-      body: JSON.stringify({
-        role: "user",
-        content: userPrompt,
-      }),
-    });
-
-    if (!messageResponse.ok) {
-      const errorText = await messageResponse.text();
-      console.error("Failed to add message:", errorText);
-      throw new Error(`Failed to add message: ${messageResponse.status}`);
-    }
-
-    // Step 3: Run the assistant
-    const runResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "assistants=v2",
-      },
-      body: JSON.stringify({
-        assistant_id: ASSISTANT_ID,
-      }),
-    });
-
-    if (!runResponse.ok) {
-      const errorText = await runResponse.text();
-      console.error("Failed to create run:", errorText);
-      throw new Error(`Failed to create run: ${runResponse.status}`);
-    }
-
-    const run = await runResponse.json();
-
-    // Step 4: Poll for completion
-    let runStatus = run.status;
-    let lastError: { code?: string; message?: string } | null = null;
-    let attempts = 0;
-    const maxAttempts = 60;
-
-    const isTerminal = (s: string) => ["completed", "failed", "cancelled", "expired"].includes(s);
-
-    while (!isTerminal(runStatus) && attempts < maxAttempts) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      const statusResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/runs/${run.id}`, {
-        headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
-          "OpenAI-Beta": "assistants=v2",
-        },
-      });
-
-      const statusText = await statusResponse.text();
-      let statusData: any = {};
-      try {
-        statusData = statusText ? JSON.parse(statusText) : {};
-      } catch {
-        // ignore
-      }
-
-      runStatus = statusData.status ?? runStatus;
-      lastError = statusData.last_error ?? lastError;
-      attempts++;
-
-      if (runStatus === "requires_action") {
-        console.error("Assistant run requires_action; tool calls are not supported in this function.");
-        break;
-      }
-    }
-
-    if (runStatus !== "completed") {
-      const errMsg =
-        runStatus === "requires_action"
-          ? "Assistant run requires tool actions (requires_action)"
-          : lastError?.message
-          ? `Run failed: ${lastError.message}`
-          : `Run did not complete. Final status: ${runStatus}`;
-
-      console.error("Run failed details:", { runStatus, lastError });
-      throw new Error(errMsg);
-    }
-
-    // Step 5: Get messages
-    const messagesResponse = await fetch(`https://api.openai.com/v1/threads/${thread.id}/messages`, {
-      headers: {
-        "Authorization": `Bearer ${OPENAI_API_KEY}`,
-        "OpenAI-Beta": "assistants=v2",
-      },
-    });
-
-    const messagesData = await messagesResponse.json();
-    const assistantMessage = messagesData.data.find((m: any) => m.role === "assistant");
+    // Use OpenAI Responses API with structured output
+    console.log("Calling OpenAI Responses API...");
     
-    if (!assistantMessage) {
-      throw new Error("No assistant message found");
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1",
+        instructions: systemInstructions,
+        input: userPrompt,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "threat_analysis",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                threatDetected: { 
+                  type: "boolean",
+                  description: "האם זוהה איום או סיכון ממשי"
+                },
+                riskLevel: { 
+                  type: ["string", "null"],
+                  enum: ["low", "medium", "high", "critical", null],
+                  description: "רמת הסיכון: low, medium, high, critical או null אם אין איום"
+                },
+                threatTypes: { 
+                  type: "array",
+                  items: { type: "string" },
+                  description: "סוגי האיומים שזוהו"
+                },
+                triggers: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      messageId: { type: "string" },
+                      type: { 
+                        type: "string",
+                        enum: ["text", "image", "audio", "video"]
+                      },
+                      preview: { type: "string" },
+                      confidence: { type: "number" }
+                    },
+                    required: ["messageId", "type", "preview", "confidence"],
+                    additionalProperties: false
+                  },
+                  description: "הודעות ספציפיות שגרמו לזיהוי האיום"
+                },
+                patterns: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      chatId: { type: "string" },
+                      patternType: { type: "string" },
+                      description: { type: "string" },
+                      confidence: { type: "number" }
+                    },
+                    required: ["chatId", "patternType", "description", "confidence"],
+                    additionalProperties: false
+                  },
+                  description: "דפוסי התנהגות חשודים שזוהו"
+                },
+                explanation: { 
+                  type: "string",
+                  description: "הסבר קצר בעברית על הממצאים"
+                }
+              },
+              required: ["threatDetected", "riskLevel", "threatTypes", "triggers", "patterns", "explanation"],
+              additionalProperties: false
+            }
+          }
+        }
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("OpenAI Responses API error:", response.status, errorText);
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
     }
 
-    const content = assistantMessage.content[0]?.text?.value;
-    if (!content) {
-      throw new Error("No content in assistant message");
-    }
+    const result = await response.json();
+    console.log("OpenAI Responses API result:", JSON.stringify(result, null, 2));
 
-    // Parse JSON from response
+    // Extract the structured output from the response
     let analysisResult;
     try {
-      const cleanedContent = content
-        .replace(/```json\n?/g, "")
-        .replace(/```\n?/g, "")
-        .trim();
-      analysisResult = JSON.parse(cleanedContent);
+      // The response structure for Responses API
+      const outputText = result.output?.[0]?.content?.[0]?.text;
+      if (outputText) {
+        analysisResult = JSON.parse(outputText);
+      } else {
+        throw new Error("No output text in response");
+      }
     } catch (parseError) {
-      console.error("Failed to parse assistant response:", content);
+      console.error("Failed to parse response:", parseError, result);
       analysisResult = {
         threatDetected: false,
         riskLevel: null,
@@ -424,6 +349,8 @@ ${JSON.stringify(formattedMessages, null, 2)}
         explanation: "לא ניתן לנתח את התוכן כרגע",
       };
     }
+
+    console.log("Analysis complete:", JSON.stringify(analysisResult, null, 2));
 
     return new Response(JSON.stringify(analysisResult), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
