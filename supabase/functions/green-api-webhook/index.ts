@@ -133,12 +133,27 @@ serve(async (req) => {
       });
     }
 
-    // Only process incoming messages
-    if (webhookData.typeWebhook !== "incomingMessageReceived") {
+    // Process both incoming and outgoing messages
+    const isIncoming = webhookData.typeWebhook === "incomingMessageReceived";
+    const isOutgoing = webhookData.typeWebhook === "outgoingMessageReceived" || 
+                       webhookData.typeWebhook === "outgoingAPIMessageReceived" ||
+                       webhookData.typeWebhook === "outgoingMessageStatus";
+    
+    if (!isIncoming && !isOutgoing) {
       return new Response(JSON.stringify({ status: "ignored" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    
+    // For outgoingMessageStatus - only process "sent" or "delivered" statuses
+    if (webhookData.typeWebhook === "outgoingMessageStatus") {
+      // Skip status updates, we only want actual message content
+      return new Response(JSON.stringify({ status: "ignored_status" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("Processing message - type:", webhookData.typeWebhook, "isOutgoing:", isOutgoing);
 
     // Find the child for this instance
     let childId: string | null = childIdFromQuery;
@@ -275,11 +290,14 @@ serve(async (req) => {
 
     const senderLabel = sanitizeText(webhookData.senderData.senderName || webhookData.senderData.sender);
 
+    // For outgoing messages, the sender is the child
+    const isChildSender = isOutgoing;
+
     const payload = {
       child_id: childId,
       chat_id: chat.id,
-      sender_label: senderLabel,
-      is_child_sender: false,
+      sender_label: isChildSender ? "אני" : senderLabel,
+      is_child_sender: isChildSender,
       msg_type: msgType,
       message_timestamp: new Date(webhookData.timestamp * 1000).toISOString(),
       text_content: textContent,
@@ -301,7 +319,7 @@ serve(async (req) => {
       .update({ last_message_at: new Date(webhookData.timestamp * 1000).toISOString() })
       .eq("id", chat.id);
 
-    console.log("Message saved for child:", childId);
+    console.log("Message saved for child:", childId, "- isChildSender:", isChildSender);
 
     return new Response(JSON.stringify({ status: "ok" }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
