@@ -60,22 +60,25 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     const audioCount = limitedMessages.filter(m => m.msg_type === 'audio' && m.media_url).length;
 
     const formattedMessages = limitedMessages.map((msg) => {
-      let content = msg.text_content;
-      if (!content) {
-        if (msg.media_url) {
-          // Show friendly description instead of raw URL
-          if (msg.msg_type === 'image') {
-            content = `[🖼️ תמונה - תיבדק על ידי AI]`;
-          } else if (msg.msg_type === 'video') {
-            content = `[🎬 וידאו - תמונה ממוזערת תיבדק על ידי AI]`;
-          } else if (msg.msg_type === 'audio') {
-            content = `[🎤 הודעה קולית - תתומלל ותיבדק על ידי AI]`;
-          } else {
-            content = `[📎 מדיה: ${msg.msg_type}]`;
-          }
-        } else {
-          content = `[מדיה: ${msg.msg_type}] (ללא URL)`;
-        }
+      let content = msg.text_content || '';
+      
+      // For media messages, show friendly description
+      if (msg.msg_type === 'image' && msg.media_url) {
+        content = msg.text_content 
+          ? `${msg.text_content} [🖼️ + תמונה]` 
+          : `[🖼️ תמונה - תיבדק על ידי AI]`;
+      } else if (msg.msg_type === 'video' && msg.media_url) {
+        content = msg.text_content 
+          ? `${msg.text_content} [🎬 + וידאו]` 
+          : `[🎬 וידאו - תמונה ממוזערת תיבדק על ידי AI]`;
+      } else if (msg.msg_type === 'audio' && msg.media_url) {
+        content = msg.text_content 
+          ? `${msg.text_content} [🎤 + הודעה קולית]` 
+          : `[🎤 הודעה קולית - תתומלל ותיבדק על ידי AI]`;
+      } else if (!content && msg.media_url) {
+        content = `[📎 מדיה: ${msg.msg_type}]`;
+      } else if (!content) {
+        content = '[הודעה ריקה]';
       }
       return {
         id: msg.id,
