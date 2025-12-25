@@ -157,7 +157,11 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
     };
   }, [initializeConnection, clearIntervals]);
 
-  const createInstance = async () => {
+  const createInstance = async (e?: React.MouseEvent) => {
+    // Prevent any form submission or navigation
+    e?.preventDefault();
+    e?.stopPropagation();
+    
     setStatus('creating');
     setErrorMessage(null);
     setCreationProgress(0);
@@ -356,7 +360,7 @@ export function ConnectorTab({ child, onUpdate }: ConnectorTabProps) {
                   צרו חיבור חדש כדי להתחיל לקבל הודעות
                 </p>
               </div>
-              <Button onClick={createInstance} variant="glow" className="gap-2">
+              <Button onClick={(e) => createInstance(e)} variant="glow" className="gap-2" type="button">
                 <Plus className="w-4 h-4" />
                 צור חיבור WhatsApp
               </Button>
