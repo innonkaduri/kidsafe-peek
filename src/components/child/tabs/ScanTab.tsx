@@ -78,14 +78,41 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
           ? '7 ימים אחרונים'
           : '30 ימים אחרונים';
 
-    const userPrompt = `נתח את השיחות הבאות וזהה סיכונים פוטנציאליים לילד/ה:
+    const userPrompt = אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
 
-טווח ניתוח: ${lookbackLabel}
+המטרה שלך:
+לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
+
+❗ חשוב מאוד:
+אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
+עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
+
+סוגי סיכון שמותר לזהות:
+- חרם, השפלה מתמשכת או אלימות רגשית קשה
+- איומים פיזיים מפורשים
+- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
+- סמים, אלכוהול או שידול לשימוש
+- פגיעה עצמית או עידוד לפגיעה עצמית
+- סחיטה, איום או מניפולציה מסוכנת
+
+❌ אסור להתריע על:
+- שיח יומיומי, בדיחות, קללות קלות
+- פוליטיקה, חדשות, דעות
+- ויכוחים רגילים
+- שפה בוטה בלי איום ממשי
+- תוכן לא נעים אך לא מסוכן
+
+טווח ניתוח:
+${lookbackLabel}
 
 הודעות לניתוח:
 ${JSON.stringify(formattedMessages, null, 2)}
 
-החזר תשובה בפורמט JSON בלבד עם המבנה הבא:
+---
+
+📤 החזר **JSON בלבד**, בלי טקסט חופשי, בלי הסברים מסביב.
+
+מבנה החזרה מחייב:
 {
   "threatDetected": boolean,
   "riskLevel": "low" | "medium" | "high" | "critical" | null,
@@ -107,8 +134,17 @@ ${JSON.stringify(formattedMessages, null, 2)}
     }
   ],
   "explanation": string
-}`;
+}
 
+אם אין סיכון ממשי → החזר:
+{
+  "threatDetected": false,
+  "riskLevel": null,
+  "threatTypes": [],
+  "triggers": [],
+  "patterns": [],
+  "explanation": "לא זוהה סיכון ממשי"
+}
     const oldestMessageAt = limitedMessages[0]?.message_timestamp ?? null;
     const newestMessageAt = limitedMessages[limitedMessages.length - 1]?.message_timestamp ?? null;
 
@@ -260,16 +296,15 @@ ${JSON.stringify(formattedMessages, null, 2)}
         throw new Error(aiResult.error);
       }
 
-      // Create finding - save even when no threats for record keeping
-      if (scan) {
+      // Create finding if threats detected
+      if (aiResult.threatDetected && scan) {
         const { error: findingError } = await supabase.from('findings').insert({
           scan_id: scan.id,
           child_id: child.id,
-          threat_detected: aiResult.threatDetected || false,
-          risk_level: aiResult.riskLevel || null,
+          threat_detected: true,
+          risk_level: aiResult.riskLevel,
           threat_types: aiResult.threatTypes || [],
-          explanation: aiResult.explanation || 'לא זוהו סיכונים',
-          ai_response_encrypted: aiResult, // Store full AI response
+          explanation: aiResult.explanation,
         });
 
         if (findingError) {
