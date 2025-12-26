@@ -18,7 +18,9 @@ import {
   MessageSquare,
   X,
   Send,
-  Users
+  Users,
+  Share2,
+  Copy
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -265,6 +267,39 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     }
   };
 
+  // Build share text for native share / clipboard
+  const buildShareText = () => {
+    const date = new Date(finding.created_at).toLocaleDateString('he-IL', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    
+    let text = `🚨 התראת SafeKids\n\n`;
+    text += `ילד/ה: ${finding.child_name}\n`;
+    text += `רמת סיכון: ${getRiskLevelText(finding.risk_level)}\n`;
+    text += `תאריך: ${date}\n`;
+    
+    if (finding.threat_types && finding.threat_types.length > 0) {
+      text += `סוג איום: ${finding.threat_types.join(', ')}\n`;
+    }
+    
+    text += `\n📝 תקציר:\n${finding.explanation || 'לא נמצא תיאור'}\n`;
+    
+    if (messages.length > 0) {
+      text += `\n💬 הודעות שזוהו:\n`;
+      messages.forEach(msg => {
+        text += `• ${formatSenderInfo(msg)}: ${msg.text_content || msg.preview || ''}\n`;
+      });
+    }
+    
+    text += `\n📌 המלצה:\n${getRecommendation(finding.threat_types, finding.risk_level)}`;
+    
+    return text;
+  };
+
   const handleShareWithTeacher = async () => {
     if (!teacherEmail) {
       toast.error('לא הוגדר מייל מורה לילד זה');
@@ -272,31 +307,62 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     }
 
     setIsSharingWithTeacher(true);
-    try {
-      const { data: session } = await supabase.auth.getSession();
-      if (!session?.session?.user) throw new Error('User not authenticated');
+    
+    const shareText = buildShareText();
+    
+    // Try native share API (mobile), fallback to clipboard (desktop)
+    const shareNatively = async () => {
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: '🚨 התראת SafeKids',
+            text: shareText,
+          });
+        } catch (err) {
+          // User cancelled or share failed - still proceed with teacher alert
+          console.log('Native share cancelled or failed:', err);
+        }
+      } else {
+        // Desktop fallback - copy to clipboard
+        try {
+          await navigator.clipboard.writeText(shareText);
+          toast.success('הטקסט הועתק ללוח');
+        } catch (err) {
+          console.error('Clipboard failed:', err);
+        }
+      }
+    };
 
-      const { error } = await supabase
-        .from('teacher_alerts')
-        .insert({
-          child_id: finding.child_id,
-          parent_user_id: session.session.user.id,
-          teacher_email: teacherEmail,
-          finding_id: finding.id,
-          severity: finding.risk_level || 'medium',
-          category: finding.threat_types?.[0] || 'אחר',
-          parent_message: finding.explanation || 'זוהתה התראה שמחייבת תשומת לב'
-        });
+    // Share to teacher in database
+    const shareToTeacher = async () => {
+      try {
+        const { data: session } = await supabase.auth.getSession();
+        if (!session?.session?.user) throw new Error('User not authenticated');
 
-      if (error) throw error;
+        const { error } = await supabase
+          .from('teacher_alerts')
+          .insert({
+            child_id: finding.child_id,
+            parent_user_id: session.session.user.id,
+            teacher_email: teacherEmail,
+            finding_id: finding.id,
+            severity: finding.risk_level || 'medium',
+            category: finding.threat_types?.[0] || 'אחר',
+            parent_message: finding.explanation || 'זוהתה התראה שמחייבת תשומת לב'
+          });
 
-      toast.success('ההתראה שותפה עם המורה בהצלחה');
-    } catch (error) {
-      console.error('Error sharing with teacher:', error);
-      toast.error('שגיאה בשיתוף עם המורה');
-    } finally {
-      setIsSharingWithTeacher(false);
-    }
+        if (error) throw error;
+        toast.success('ההתראה שותפה עם המורה בהצלחה');
+      } catch (error) {
+        console.error('Error sharing with teacher:', error);
+        toast.error('שגיאה בשיתוף עם המורה');
+      }
+    };
+
+    // Execute both actions in parallel
+    await Promise.all([shareNatively(), shareToTeacher()]);
+    
+    setIsSharingWithTeacher(false);
   };
 
   const formatSenderInfo = (message: MessageInfo) => {
@@ -482,7 +548,7 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
                 variant="outline"
                 className="w-full border-primary text-primary hover:bg-primary/10"
               >
-                <Send className="w-4 h-4 ml-2" />
+                <Share2 className="w-4 h-4 ml-2" />
                 {isSharingWithTeacher ? 'משתף...' : `שתף עם המורה (${teacherEmail})`}
               </Button>
             )}
