@@ -12,6 +12,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
+import { AlertDetailModal } from '@/components/alerts/AlertDetailModal';
 
 interface Finding {
   id: string;
@@ -23,6 +24,8 @@ interface Finding {
   explanation: string | null;
   created_at: string;
   child_name?: string;
+  handled?: boolean;
+  handled_at?: string | null;
 }
 
 interface ChildOption {
@@ -34,6 +37,8 @@ export default function Alerts() {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [children, setChildren] = useState<ChildOption[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -263,7 +268,10 @@ export default function Alerts() {
             {filteredFindings.map((finding, index) => (
               <div
                 key={finding.id}
-                onClick={() => navigate(`/child/${finding.child_id}?tab=findings`)}
+                onClick={() => {
+                  setSelectedFinding(finding);
+                  setModalOpen(true);
+                }}
                 className={`glass-card p-6 cursor-pointer hover:border-primary/50 transition-all animate-enter animate-enter-${(index % 5) + 1}`}
               >
                 <div className="flex items-center gap-4">
@@ -316,6 +324,14 @@ export default function Alerts() {
             ))}
           </div>
         )}
+
+        {/* Alert Detail Modal */}
+        <AlertDetailModal
+          finding={selectedFinding}
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+          onUpdate={fetchData}
+        />
       </div>
     </Layout>
   );
