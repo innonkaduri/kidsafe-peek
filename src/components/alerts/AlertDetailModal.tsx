@@ -23,6 +23,23 @@ import {
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
+interface Trigger {
+  messageId: string;
+  preview: string;
+  type: string;
+  confidence: number;
+}
+
+interface AIResponse {
+  triggers?: Trigger[];
+  patterns?: Array<{
+    chatId: string;
+    description: string;
+    patternType: string;
+    confidence: number;
+  }>;
+}
+
 interface Finding {
   id: string;
   child_id: string;
@@ -35,15 +52,16 @@ interface Finding {
   child_name?: string;
   handled?: boolean;
   handled_at?: string | null;
+  ai_response_encrypted?: AIResponse | null;
 }
 
-interface EvidenceMessage {
+interface MessageInfo {
   id: string;
   sender_label: string;
   text_content: string | null;
-  text_excerpt: string | null;
   chat_name: string;
   is_group: boolean;
+  preview?: string;
 }
 
 interface AlertDetailModalProps {
@@ -57,15 +75,99 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSharingWithTeacher, setIsSharingWithTeacher] = useState(false);
   const [teacherEmail, setTeacherEmail] = useState<string | null>(null);
-  const [evidenceMessages, setEvidenceMessages] = useState<EvidenceMessage[]>([]);
-  const [loadingEvidence, setLoadingEvidence] = useState(false);
+  const [messages, setMessages] = useState<MessageInfo[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [fullFinding, setFullFinding] = useState<Finding | null>(null);
 
   useEffect(() => {
     if (finding && open) {
+      fetchFullFinding();
       fetchTeacherEmail();
-      fetchEvidenceMessages();
     }
   }, [finding, open]);
+
+  const fetchFullFinding = async () => {
+    if (!finding) return;
+    
+    setLoadingMessages(true);
+    
+    // Get the full finding with ai_response_encrypted
+    const { data: findingData } = await supabase
+      .from('findings')
+      .select('*')
+      .eq('id', finding.id)
+      .single();
+    
+    if (findingData) {
+      const aiResponse = findingData.ai_response_encrypted as AIResponse | null;
+      setFullFinding({
+        ...finding,
+        ai_response_encrypted: aiResponse
+      });
+      
+      // Extract message IDs from triggers
+      if (aiResponse?.triggers && aiResponse.triggers.length > 0) {
+        const messageIds = aiResponse.triggers
+          .map(t => t.messageId)
+          .filter(id => id && !id.includes('T')); // Filter out timestamp-like IDs
+        
+        if (messageIds.length > 0) {
+          const { data: messagesData } = await supabase
+            .from('messages')
+            .select('id, sender_label, text_content, text_excerpt, chat_id')
+            .in('id', messageIds);
+          
+          if (messagesData && messagesData.length > 0) {
+            const chatIds = [...new Set(messagesData.map(m => m.chat_id))];
+            
+            const { data: chats } = await supabase
+              .from('chats')
+              .select('id, chat_name, is_group')
+              .in('id', chatIds);
+            
+            const messagesWithChats: MessageInfo[] = messagesData.map(m => {
+              const chat = chats?.find(c => c.id === m.chat_id);
+              const trigger = aiResponse.triggers?.find(t => t.messageId === m.id);
+              return {
+                id: m.id,
+                sender_label: m.sender_label,
+                text_content: m.text_content || m.text_excerpt || null,
+                chat_name: chat?.chat_name || 'לא ידוע',
+                is_group: chat?.is_group || false,
+                preview: trigger?.preview
+              };
+            });
+            
+            setMessages(messagesWithChats);
+          } else {
+            // Fallback: use preview from triggers directly
+            const fallbackMessages: MessageInfo[] = aiResponse.triggers.map((t, idx) => ({
+              id: `trigger-${idx}`,
+              sender_label: 'לא ידוע',
+              text_content: t.preview,
+              chat_name: aiResponse.patterns?.[0]?.chatId || 'לא ידוע',
+              is_group: false,
+              preview: t.preview
+            }));
+            setMessages(fallbackMessages);
+          }
+        } else {
+          // Use preview from triggers when messageIds are timestamps
+          const fallbackMessages: MessageInfo[] = aiResponse.triggers.map((t, idx) => ({
+            id: `trigger-${idx}`,
+            sender_label: 'לא ידוע',
+            text_content: t.preview,
+            chat_name: aiResponse.patterns?.[0]?.chatId || 'לא ידוע',
+            is_group: false,
+            preview: t.preview
+          }));
+          setMessages(fallbackMessages);
+        }
+      }
+    }
+    
+    setLoadingMessages(false);
+  };
 
   const fetchTeacherEmail = async () => {
     if (!finding) return;
@@ -79,53 +181,6 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     if (data) {
       setTeacherEmail(data.teacher_email);
     }
-  };
-
-  const fetchEvidenceMessages = async () => {
-    if (!finding) return;
-    
-    setLoadingEvidence(true);
-    
-    const { data: evidence } = await supabase
-      .from('evidence_items')
-      .select('message_id, preview_text')
-      .eq('finding_id', finding.id);
-    
-    if (evidence && evidence.length > 0) {
-      const messageIds = evidence.filter(e => e.message_id).map(e => e.message_id);
-      
-      if (messageIds.length > 0) {
-        const { data: messages } = await supabase
-          .from('messages')
-          .select('id, sender_label, text_content, text_excerpt, chat_id')
-          .in('id', messageIds);
-        
-        if (messages && messages.length > 0) {
-          const chatIds = [...new Set(messages.map(m => m.chat_id))];
-          
-          const { data: chats } = await supabase
-            .from('chats')
-            .select('id, chat_name, is_group')
-            .in('id', chatIds);
-          
-          const messagesWithChats = messages.map(m => {
-            const chat = chats?.find(c => c.id === m.chat_id);
-            return {
-              id: m.id,
-              sender_label: m.sender_label,
-              text_content: m.text_content,
-              text_excerpt: m.text_excerpt,
-              chat_name: chat?.chat_name || 'לא ידוע',
-              is_group: chat?.is_group || false
-            };
-          });
-          
-          setEvidenceMessages(messagesWithChats);
-        }
-      }
-    }
-    
-    setLoadingEvidence(false);
   };
 
   if (!finding) return null;
@@ -165,6 +220,7 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
       'חרם': 'מומלץ לשוחח עם הילד על מה שקורה בבית הספר ולפנות לצוות החינוכי.',
       'השפלה מתמשכת או אלימות רגשית קשה': 'יש לפנות מיידית לגורם מקצועי ולשקול דיווח לרשויות הרווחה.',
       'בריונות': 'מומלץ לתעד את האירועים ולפנות להנהלת בית הספר.',
+      'harassment_bullying': 'מומלץ לתעד את האירועים ולפנות להנהלת בית הספר.',
       'תוכן מיני': 'יש לשוחח עם הילד בזהירות ולשקול פנייה לגורם מקצועי.',
       'סחיטה': 'יש לדווח לרשויות ולא להיענות לדרישות הסוחט.',
       'אלימות': 'יש לתעד ולדווח לרשויות המתאימות.',
@@ -243,7 +299,7 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     }
   };
 
-  const formatSenderInfo = (message: EvidenceMessage) => {
+  const formatSenderInfo = (message: MessageInfo) => {
     if (message.is_group) {
       return `${message.chat_name} • ${message.sender_label}`;
     }
@@ -297,26 +353,26 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
           </div>
 
           {/* Sender Info & Message Content */}
-          {evidenceMessages.length > 0 && (
+          {messages.length > 0 && (
             <div className="space-y-3">
               <h4 className="font-heebo font-semibold text-foreground flex items-center gap-2">
                 <Users className="w-4 h-4 text-primary" />
-                פרטי השולח והודעה
+                הודעות שזוהו
               </h4>
               <div className="space-y-3">
-                {evidenceMessages.map((message, index) => (
+                {messages.map((message, index) => (
                   <div key={message.id || index} className="p-4 rounded-xl bg-card/30 border border-border space-y-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {message.is_group && (
+                        <Badge variant="outline" className="text-xs">קבוצה</Badge>
+                      )}
                       <span className="text-sm font-medium text-primary">
-                        {message.is_group && (
-                          <Badge variant="outline" className="ml-2 text-xs">קבוצה</Badge>
-                        )}
                         {formatSenderInfo(message)}
                       </span>
                     </div>
                     <div className="p-3 rounded-lg bg-background/50 border border-border/50">
                       <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
-                        {message.text_content || message.text_excerpt || 'תוכן לא זמין'}
+                        {message.text_content || message.preview || 'תוכן לא זמין'}
                       </p>
                     </div>
                   </div>
@@ -325,9 +381,9 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
             </div>
           )}
 
-          {loadingEvidence && (
+          {loadingMessages && (
             <div className="p-4 rounded-xl bg-card/30 border border-border text-center">
-              <p className="text-muted-foreground text-sm">טוען פרטי הודעה...</p>
+              <p className="text-muted-foreground text-sm">טוען פרטי הודעות...</p>
             </div>
           )}
 
