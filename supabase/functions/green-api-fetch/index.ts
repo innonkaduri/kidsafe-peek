@@ -123,12 +123,24 @@ async function getGreenApiCredentials(
 }
 
 serve(async (req) => {
-  console.log("=== green-api-fetch v4: downloadFile enabled with debug ===");
+  console.log("=== green-api-fetch v5: optimized for timeout prevention ===");
   
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const startTime = Date.now();
+  const MAX_EXECUTION_TIME = 45000; // 45 seconds max to leave buffer
+  
+  const shouldContinue = () => {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > MAX_EXECUTION_TIME) {
+      console.log(`Timeout protection: stopping after ${elapsed}ms`);
+      return false;
+    }
+    return true;
+  };
 
   try {
     const { child_id }: FetchRequest = await req.json();
@@ -179,7 +191,7 @@ serve(async (req) => {
     let totalMessagesImported = 0;
     let totalChatsProcessed = 0;
 
-    for (const chat of chats.slice(0, 20)) { // Limit to 20 most recent chats
+    for (const chat of chats.slice(0, 10)) { // Limit to 10 most recent chats to prevent timeout
       try {
         const chatName = sanitizeText(chat.name || chat.id);
 
@@ -227,12 +239,18 @@ serve(async (req) => {
 
         const messages: GreenAPIMessage[] = await messagesResponse.json();
 
-        // Track media fetch count to limit API calls - increased limit for better coverage
+        // Track media fetch count to limit API calls - reduced for timeout prevention
         let mediaFetchCount = 0;
-        const MAX_MEDIA_PER_CHAT = 50;
+        const MAX_MEDIA_PER_CHAT = 10; // Reduced from 50 to prevent timeout
         let debugLogCount = 0;
 
         console.log(`Processing ${messages.length} messages for chat ${chat.id}`);
+        
+        // Check timeout before processing messages
+        if (!shouldContinue()) {
+          console.log("Stopping due to timeout protection");
+          break;
+        }
 
         for (const msg of messages) {
           // Detect message type
@@ -280,8 +298,8 @@ serve(async (req) => {
               }
               
               mediaFetchCount++;
-              // Add delay to prevent rate limiting
-              await new Promise(resolve => setTimeout(resolve, 150));
+              // Reduced delay to prevent timeout
+              await new Promise(resolve => setTimeout(resolve, 50));
             } catch (downloadError) {
               console.error(`Error fetching downloadUrl for ${msg.idMessage}:`, downloadError);
             }
@@ -346,6 +364,12 @@ serve(async (req) => {
         }
 
         totalChatsProcessed++;
+        
+        // Check timeout after each chat
+        if (!shouldContinue()) {
+          console.log("Stopping chat loop due to timeout protection");
+          break;
+        }
       } catch (chatError) {
         console.error(`Error processing chat ${chat.id}:`, chatError);
       }
