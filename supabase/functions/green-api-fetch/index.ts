@@ -122,8 +122,39 @@ async function getGreenApiCredentials(
   return null;
 }
 
+// Helper function for rate-limited API calls with retry
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // If rate limited, wait and retry
+      if (response.status === 429) {
+        const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+        console.log(`Rate limited (429), waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        continue;
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.error(`Fetch attempt ${attempt + 1} failed:`, lastError.message);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  throw lastError || new Error("Fetch failed after retries");
+}
+
 serve(async (req) => {
-  console.log("=== green-api-fetch v5: optimized for timeout prevention ===");
+  console.log("=== green-api-fetch v6: with rate limiting protection ===");
   
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -131,7 +162,7 @@ serve(async (req) => {
   }
 
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 45000; // 45 seconds max to leave buffer
+  const MAX_EXECUTION_TIME = 40000; // 40 seconds max to leave more buffer
   
   const shouldContinue = () => {
     const elapsed = Date.now() - startTime;
@@ -175,8 +206,8 @@ serve(async (req) => {
 
     console.log("Fetching chats for child:", child_id, "instance:", instanceId);
 
-    // Fetch recent chats
-    const chatsResponse = await fetch(`${baseUrl}/getChats/${apiToken}`, {
+    // Fetch recent chats with retry logic
+    const chatsResponse = await fetchWithRetry(`${baseUrl}/getChats/${apiToken}`, {
       method: "GET",
     });
 
@@ -191,7 +222,8 @@ serve(async (req) => {
     let totalMessagesImported = 0;
     let totalChatsProcessed = 0;
 
-    for (const chat of chats.slice(0, 10)) { // Limit to 10 most recent chats to prevent timeout
+    // Reduced to 5 chats to prevent rate limiting
+    for (const chat of chats.slice(0, 5)) {
       try {
         const chatName = sanitizeText(chat.name || chat.id);
 
@@ -225,11 +257,14 @@ serve(async (req) => {
           dbChat = newChat;
         }
 
-        // Fetch messages for this chat
-        const messagesResponse = await fetch(`${baseUrl}/getChatHistory/${apiToken}`, {
+        // Add delay between chats to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Fetch messages for this chat with retry
+        const messagesResponse = await fetchWithRetry(`${baseUrl}/getChatHistory/${apiToken}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chatId: chat.id, count: 50 }),
+          body: JSON.stringify({ chatId: chat.id, count: 30 }), // Reduced from 50
         });
 
         if (!messagesResponse.ok) {
@@ -270,7 +305,7 @@ serve(async (req) => {
               const chatIdForDownload = msg.chatId || chat.id;
               console.log(`Fetching downloadUrl for ${msg.idMessage} (type: ${messageType}, chatId: ${chatIdForDownload})`);
               
-              const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
+              const downloadResponse = await fetchWithRetry(`${baseUrl}/downloadFile/${apiToken}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ 
