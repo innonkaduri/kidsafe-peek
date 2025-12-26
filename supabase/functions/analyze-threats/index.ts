@@ -115,8 +115,9 @@ async function transcribeAudio(audioUrl: string, authHeader: string): Promise<st
     }
 
     const result = await response.json();
-    console.log(`Transcription result:`, result);
-    return result.transcription || result.text || null;
+    const transcription = result.transcript || result.transcription || result.text || null;
+    console.log(`Transcription result: ${transcription ? `"${transcription.substring(0, 80)}..."` : 'FAILED - no transcript'}`);
+    return transcription;
   } catch (error) {
     console.error("Failed to transcribe audio:", error);
     return null;
