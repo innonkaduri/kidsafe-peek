@@ -32,7 +32,7 @@ interface MediaData {
 }
 
 // Download media and convert to Base64 - with size limit to prevent memory issues
-const MAX_FILE_SIZE = 500 * 1024; // 500KB limit per file (increased from 150KB)
+const MAX_FILE_SIZE = 400 * 1024; // 400KB limit per file
 
 // Allowed image MIME types for OpenAI Vision API
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
@@ -93,7 +93,7 @@ async function downloadMediaAsBase64(url: string, requireImageType: boolean = tr
   }
 }
 
-// Transcribe audio using the transcribe-audio edge function
+// Transcribe audio/video using the transcribe-audio edge function
 async function transcribeAudio(audioUrl: string, authHeader: string): Promise<string | null> {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -120,6 +120,37 @@ async function transcribeAudio(audioUrl: string, authHeader: string): Promise<st
     return transcription;
   } catch (error) {
     console.error("Failed to transcribe audio:", error);
+    return null;
+  }
+}
+
+// Analyze video using the analyze-video edge function
+async function analyzeVideo(videoUrl: string, authHeader: string): Promise<string | null> {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    if (!supabaseUrl) return null;
+
+    console.log(`Analyzing video from: ${videoUrl}`);
+    const response = await fetch(`${supabaseUrl}/functions/v1/analyze-video`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": authHeader,
+      },
+      body: JSON.stringify({ video_url: videoUrl }),
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to analyze video: ${response.status}`);
+      return null;
+    }
+
+    const result = await response.json();
+    const description = result.description || null;
+    console.log(`Video analysis result: ${description ? `"${description.substring(0, 80)}..."` : 'FAILED - no description'}`);
+    return description;
+  } catch (error) {
+    console.error("Failed to analyze video:", error);
     return null;
   }
 }
@@ -216,8 +247,13 @@ serve(async (req) => {
     // Limit messages to avoid token overflow - take most recent 50 messages
     const limitedMessages = messages.slice(-50);
 
-    // Process media messages - download images as Base64 and transcribe audio
-    const mediaDataMap: Map<string, { type: "image" | "audio" | "video"; data: MediaData | null; transcription: string | null }> = new Map();
+    // Process media messages - download images as Base64 and transcribe audio/video
+    const mediaDataMap: Map<string, { 
+      type: "image" | "audio" | "video"; 
+      data: MediaData | null; 
+      transcription: string | null;
+      videoDescription: string | null;
+    }> = new Map();
     
     const mediaMessages = limitedMessages.filter(
       (msg) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
@@ -227,38 +263,58 @@ serve(async (req) => {
     console.log(`Total messages: ${limitedMessages.length}, Messages with media_url: ${mediaMessages.length}`);
     console.log(`Media types: ${JSON.stringify(mediaMessages.map(m => ({ type: m.msg_type, hasUrl: !!m.media_url, hasThumbnail: !!m.media_thumbnail_url })))}`);
 
-    // Limit to 5 images to prevent memory overflow
+    // Increased limit to 15 images
     let imageCount = 0;
-    const MAX_IMAGES = 5;
+    const MAX_IMAGES = 15;
 
-    // Process images one at a time to minimize memory usage
+    // Process media one at a time to minimize memory usage
     for (const msg of mediaMessages) {
       if (msg.msg_type === "audio" && msg.media_url) {
         // Transcribe audio
         const transcription = await transcribeAudio(msg.media_url, authHeader);
-        mediaDataMap.set(msg.id, { type: "audio", data: null, transcription });
+        mediaDataMap.set(msg.id, { type: "audio", data: null, transcription, videoDescription: null });
       } else if (msg.msg_type === "image" && msg.media_url && imageCount < MAX_IMAGES) {
         // Download image as Base64
         const mediaData = await downloadMediaAsBase64(msg.media_url);
         if (mediaData) {
-          mediaDataMap.set(msg.id, { type: "image", data: mediaData, transcription: null });
+          mediaDataMap.set(msg.id, { type: "image", data: mediaData, transcription: null, videoDescription: null });
           imageCount++;
         }
-      } else if (msg.msg_type === "video" && imageCount < MAX_IMAGES) {
-        // For video, prefer thumbnail, but try media_url if no thumbnail
-        const thumbnailUrl = msg.media_thumbnail_url || msg.media_url;
-        if (thumbnailUrl) {
-          console.log(`Trying to download video thumbnail/frame from: ${thumbnailUrl}`);
-          const mediaData = await downloadMediaAsBase64(thumbnailUrl);
-          if (mediaData) {
-            mediaDataMap.set(msg.id, { type: "video", data: mediaData, transcription: null });
-            imageCount++;
-          }
+      } else if (msg.msg_type === "video" && msg.media_url) {
+        // For video: transcribe audio AND analyze video content
+        console.log(`Processing video: ${msg.media_url}`);
+        
+        // 1. Transcribe audio from video
+        const transcription = await transcribeAudio(msg.media_url, authHeader);
+        
+        // 2. Analyze video content visually
+        const videoDescription = await analyzeVideo(msg.media_url, authHeader);
+        
+        // 3. Also try to get thumbnail if available and we have room
+        let mediaData: MediaData | null = null;
+        if (msg.media_thumbnail_url && imageCount < MAX_IMAGES) {
+          mediaData = await downloadMediaAsBase64(msg.media_thumbnail_url);
+          if (mediaData) imageCount++;
         }
+        
+        mediaDataMap.set(msg.id, { 
+          type: "video", 
+          data: mediaData, 
+          transcription, 
+          videoDescription 
+        });
+        
+        console.log(`Video processed - transcription: ${transcription ? 'YES' : 'NO'}, description: ${videoDescription ? 'YES' : 'NO'}, thumbnail: ${mediaData ? 'YES' : 'NO'}`);
       }
     }
 
-    console.log(`Processed media: ${imageCount} images, ${mediaDataMap.size} total`);
+    // Log skipped images
+    const totalImages = mediaMessages.filter(m => m.msg_type === 'image').length;
+    if (totalImages > imageCount) {
+      console.log(`⚠️ Skipped ${totalImages - imageCount} images due to limit (${MAX_IMAGES})`);
+    }
+
+    console.log(`Processed media: ${imageCount} images, ${mediaDataMap.size} total items`);
 
     // Build text content for messages
     const textParts: string[] = [];
@@ -288,19 +344,41 @@ serve(async (req) => {
             detail: "low" // Use low detail to save tokens
           }
         });
-      } else if (mediaInfo?.type === "video" && mediaInfo.data) {
-        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [וידאו - ראה תמונה ממוזערת #${imageParts.length + 1}]`;
+      } else if (mediaInfo?.type === "video") {
+        // Video with transcription and/or description
+        let label = "[וידאו";
+        
+        if (mediaInfo.transcription) {
+          const truncatedTranscription = mediaInfo.transcription.length > 150 
+            ? mediaInfo.transcription.substring(0, 150) + "..." 
+            : mediaInfo.transcription;
+          label += ` - תמלול: "${truncatedTranscription}"`;
+        }
+        
+        if (mediaInfo.videoDescription) {
+          const truncatedDescription = mediaInfo.videoDescription.length > 150 
+            ? mediaInfo.videoDescription.substring(0, 150) + "..." 
+            : mediaInfo.videoDescription;
+          label += ` - תיאור ויזואלי: "${truncatedDescription}"`;
+        }
+        
+        if (mediaInfo.data) {
+          label += ` - ראה תמונה ממוזערת #${imageParts.length + 1}`;
+          // Add thumbnail to image parts
+          imageParts.push({
+            type: "image_url",
+            image_url: {
+              url: `data:${mediaInfo.data.mimeType};base64,${mediaInfo.data.base64}`,
+              detail: "low"
+            }
+          });
+        }
+        
+        label += "]";
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: ${label}`;
         if (msg.text_content) {
           messageText += ` כיתוב: ${msg.text_content}`;
         }
-        // Add thumbnail to image parts
-        imageParts.push({
-          type: "image_url",
-          image_url: {
-            url: `data:${mediaInfo.data.mimeType};base64,${mediaInfo.data.base64}`,
-            detail: "low"
-          }
-        });
       } else if (msg.msg_type !== "text") {
         // Media without data
         const mediaLabel = msg.msg_type === "audio" ? "הודעה קולית" : msg.msg_type === "video" ? "וידאו" : "תמונה";
