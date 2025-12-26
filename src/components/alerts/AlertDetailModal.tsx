@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -6,7 +6,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { 
@@ -17,7 +16,9 @@ import {
   FileText,
   Lightbulb,
   MessageSquare,
-  X
+  X,
+  Send,
+  Users
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -36,6 +37,15 @@ interface Finding {
   handled_at?: string | null;
 }
 
+interface EvidenceMessage {
+  id: string;
+  sender_label: string;
+  text_content: string | null;
+  text_excerpt: string | null;
+  chat_name: string;
+  is_group: boolean;
+}
+
 interface AlertDetailModalProps {
   finding: Finding | null;
   open: boolean;
@@ -44,8 +54,79 @@ interface AlertDetailModalProps {
 }
 
 export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: AlertDetailModalProps) {
-  const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSharingWithTeacher, setIsSharingWithTeacher] = useState(false);
+  const [teacherEmail, setTeacherEmail] = useState<string | null>(null);
+  const [evidenceMessages, setEvidenceMessages] = useState<EvidenceMessage[]>([]);
+  const [loadingEvidence, setLoadingEvidence] = useState(false);
+
+  useEffect(() => {
+    if (finding && open) {
+      fetchTeacherEmail();
+      fetchEvidenceMessages();
+    }
+  }, [finding, open]);
+
+  const fetchTeacherEmail = async () => {
+    if (!finding) return;
+    
+    const { data } = await supabase
+      .from('children')
+      .select('teacher_email')
+      .eq('id', finding.child_id)
+      .single();
+    
+    if (data) {
+      setTeacherEmail(data.teacher_email);
+    }
+  };
+
+  const fetchEvidenceMessages = async () => {
+    if (!finding) return;
+    
+    setLoadingEvidence(true);
+    
+    const { data: evidence } = await supabase
+      .from('evidence_items')
+      .select('message_id, preview_text')
+      .eq('finding_id', finding.id);
+    
+    if (evidence && evidence.length > 0) {
+      const messageIds = evidence.filter(e => e.message_id).map(e => e.message_id);
+      
+      if (messageIds.length > 0) {
+        const { data: messages } = await supabase
+          .from('messages')
+          .select('id, sender_label, text_content, text_excerpt, chat_id')
+          .in('id', messageIds);
+        
+        if (messages && messages.length > 0) {
+          const chatIds = [...new Set(messages.map(m => m.chat_id))];
+          
+          const { data: chats } = await supabase
+            .from('chats')
+            .select('id, chat_name, is_group')
+            .in('id', chatIds);
+          
+          const messagesWithChats = messages.map(m => {
+            const chat = chats?.find(c => c.id === m.chat_id);
+            return {
+              id: m.id,
+              sender_label: m.sender_label,
+              text_content: m.text_content,
+              text_excerpt: m.text_excerpt,
+              chat_name: chat?.chat_name || 'לא ידוע',
+              is_group: chat?.is_group || false
+            };
+          });
+          
+          setEvidenceMessages(messagesWithChats);
+        }
+      }
+    }
+    
+    setLoadingEvidence(false);
+  };
 
   if (!finding) return null;
 
@@ -111,7 +192,7 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
         .update({ 
           handled: true, 
           handled_at: new Date().toISOString(),
-          threat_detected: false // Mark as handled
+          threat_detected: false
         })
         .eq('id', finding.id);
 
@@ -126,6 +207,47 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleShareWithTeacher = async () => {
+    if (!teacherEmail) {
+      toast.error('לא הוגדר מייל מורה לילד זה');
+      return;
+    }
+
+    setIsSharingWithTeacher(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.user) throw new Error('User not authenticated');
+
+      const { error } = await supabase
+        .from('teacher_alerts')
+        .insert({
+          child_id: finding.child_id,
+          parent_user_id: session.session.user.id,
+          teacher_email: teacherEmail,
+          finding_id: finding.id,
+          severity: finding.risk_level || 'medium',
+          category: finding.threat_types?.[0] || 'אחר',
+          parent_message: finding.explanation || 'זוהתה התראה שמחייבת תשומת לב'
+        });
+
+      if (error) throw error;
+
+      toast.success('ההתראה שותפה עם המורה בהצלחה');
+    } catch (error) {
+      console.error('Error sharing with teacher:', error);
+      toast.error('שגיאה בשיתוף עם המורה');
+    } finally {
+      setIsSharingWithTeacher(false);
+    }
+  };
+
+  const formatSenderInfo = (message: EvidenceMessage) => {
+    if (message.is_group) {
+      return `${message.chat_name} • ${message.sender_label}`;
+    }
+    return message.sender_label;
   };
 
   return (
@@ -173,6 +295,41 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
               </div>
             </div>
           </div>
+
+          {/* Sender Info & Message Content */}
+          {evidenceMessages.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="font-heebo font-semibold text-foreground flex items-center gap-2">
+                <Users className="w-4 h-4 text-primary" />
+                פרטי השולח והודעה
+              </h4>
+              <div className="space-y-3">
+                {evidenceMessages.map((message, index) => (
+                  <div key={message.id || index} className="p-4 rounded-xl bg-card/30 border border-border space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-primary">
+                        {message.is_group && (
+                          <Badge variant="outline" className="ml-2 text-xs">קבוצה</Badge>
+                        )}
+                        {formatSenderInfo(message)}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-background/50 border border-border/50">
+                      <p className="text-foreground text-sm leading-relaxed whitespace-pre-wrap">
+                        {message.text_content || message.text_excerpt || 'תוכן לא זמין'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {loadingEvidence && (
+            <div className="p-4 rounded-xl bg-card/30 border border-border text-center">
+              <p className="text-muted-foreground text-sm">טוען פרטי הודעה...</p>
+            </div>
+          )}
 
           {/* Threat Types */}
           {finding.threat_types && finding.threat_types.length > 0 && (
@@ -241,35 +398,38 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
 
           <Separator className="bg-border" />
 
-          {/* Notes Section */}
-          <div className="space-y-3">
-            <h4 className="font-heebo font-semibold text-foreground">הערות לטיפול</h4>
-            <Textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="הוסף הערות על אופן הטיפול באירוע..."
-              className="min-h-[100px] bg-input border-border resize-none"
-            />
-          </div>
-
           {/* Actions */}
-          <div className="flex items-center gap-3 pt-4">
-            <Button
-              onClick={handleMarkAsHandled}
-              disabled={isSubmitting}
-              className="flex-1 bg-success hover:bg-success/90 text-success-foreground"
-            >
-              <CheckCircle className="w-4 h-4 ml-2" />
-              {isSubmitting ? 'מעדכן...' : 'סמן כטופל'}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="border-border"
-            >
-              <X className="w-4 h-4 ml-2" />
-              סגור
-            </Button>
+          <div className="flex flex-col gap-3 pt-4">
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleMarkAsHandled}
+                disabled={isSubmitting}
+                className="flex-1 bg-success hover:bg-success/90 text-success-foreground"
+              >
+                <CheckCircle className="w-4 h-4 ml-2" />
+                {isSubmitting ? 'מעדכן...' : 'סמן כטופל'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                className="border-border"
+              >
+                <X className="w-4 h-4 ml-2" />
+                סגור
+              </Button>
+            </div>
+            
+            {teacherEmail && (
+              <Button
+                onClick={handleShareWithTeacher}
+                disabled={isSharingWithTeacher}
+                variant="outline"
+                className="w-full border-primary text-primary hover:bg-primary/10"
+              >
+                <Send className="w-4 h-4 ml-2" />
+                {isSharingWithTeacher ? 'משתף...' : `שתף עם המורה (${teacherEmail})`}
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>
