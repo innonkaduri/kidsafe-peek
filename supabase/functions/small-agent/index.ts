@@ -1,3 +1,4 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -6,13 +7,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// Optimized short prompt for cost efficiency
+// Token cost estimates for gpt-4o-mini (per 1M tokens)
+const INPUT_COST_PER_1M = 0.15;
+const OUTPUT_COST_PER_1M = 0.60;
+
 const SYSTEM_PROMPT = `SafeKids Small Agent. Fast risk detection for child safety.
 Rules: No drama. Few false positives. Score 0-100.
+Risk codes: GROOMING, SEXUAL, VIOLENCE, MEETUP, EXTORTION, NUDES_REQUEST, ISOLATION, MANIPULATION, DRUGS, SELF_HARM, BULLYING
 Output STRICT JSON only.`;
 
 const USER_TEMPLATE = (childAge: number, messages: any[]) => `
@@ -70,6 +75,62 @@ async function logModelCall(
   }
 }
 
+async function updateUsageMeter(
+  supabase: any,
+  childId: string,
+  callType: 'small' | 'smart' | 'fallback' | 'image_caption',
+  inputTokens: number,
+  outputTokens: number
+) {
+  const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+  
+  // Calculate estimated cost based on model
+  let estCost = 0;
+  if (callType === 'small') {
+    // gpt-4o-mini pricing
+    estCost = (inputTokens * INPUT_COST_PER_1M + outputTokens * OUTPUT_COST_PER_1M) / 1_000_000;
+  }
+  
+  try {
+    // Try to upsert usage meter
+    const { data: existing } = await supabase
+      .from('usage_meter')
+      .select('*')
+      .eq('child_id', childId)
+      .eq('month_yyyy_mm', monthKey)
+      .single();
+    
+    if (existing) {
+      const updates: any = {
+        est_cost_usd: (parseFloat(existing.est_cost_usd) || 0) + estCost,
+        updated_at: new Date().toISOString()
+      };
+      
+      if (callType === 'small') updates.small_calls = (existing.small_calls || 0) + 1;
+      if (callType === 'smart') updates.smart_calls = (existing.smart_calls || 0) + 1;
+      if (callType === 'fallback') updates.fallback_calls = (existing.fallback_calls || 0) + 1;
+      if (callType === 'image_caption') updates.image_caption_calls = (existing.image_caption_calls || 0) + 1;
+      
+      await supabase
+        .from('usage_meter')
+        .update(updates)
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('usage_meter').insert({
+        child_id: childId,
+        month_yyyy_mm: monthKey,
+        est_cost_usd: estCost,
+        small_calls: callType === 'small' ? 1 : 0,
+        smart_calls: callType === 'smart' ? 1 : 0,
+        fallback_calls: callType === 'fallback' ? 1 : 0,
+        image_caption_calls: callType === 'image_caption' ? 1 : 0
+      });
+    }
+  } catch (e) {
+    console.error('Failed to update usage meter:', e);
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -90,21 +151,22 @@ serve(async (req) => {
 
     console.log(`Small Agent: Processing ${messages.length} messages for chat ${chat_id}`);
 
-    // Call Lovable AI (Gemini Flash)
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    // Call OpenAI gpt-4o-mini
+    const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: USER_TEMPLATE(child_age, messages) }
         ],
         temperature: 0.2,
-        max_tokens: 500
+        max_tokens: 500,
+        response_format: { type: "json_object" }
       })
     });
 
@@ -112,9 +174,9 @@ serve(async (req) => {
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
-      console.error('AI API error:', aiResponse.status, errorText);
+      console.error('OpenAI API error:', aiResponse.status, errorText);
       
-      await logModelCall(supabase, 'small-agent', 'gemini-2.5-flash', 0, 0, latencyMs, false, child_id, errorText);
+      await logModelCall(supabase, 'small-agent', 'gpt-4o-mini', 0, 0, latencyMs, false, child_id, errorText);
       
       if (aiResponse.status === 429) {
         return new Response(JSON.stringify({ error: 'Rate limited, retry later' }), {
@@ -123,7 +185,7 @@ serve(async (req) => {
         });
       }
       
-      throw new Error(`AI API error: ${aiResponse.status}`);
+      throw new Error(`OpenAI API error: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
@@ -134,7 +196,7 @@ serve(async (req) => {
     await logModelCall(
       supabase,
       'small-agent',
-      'gemini-2.5-flash',
+      'gpt-4o-mini',
       usage.prompt_tokens || 0,
       usage.completion_tokens || 0,
       latencyMs,
@@ -142,15 +204,22 @@ serve(async (req) => {
       child_id
     );
 
+    // Update usage meter
+    await updateUsageMeter(
+      supabase,
+      child_id,
+      'small',
+      usage.prompt_tokens || 0,
+      usage.completion_tokens || 0
+    );
+
     // Parse JSON response
     let analysisResult;
     try {
-      // Clean potential markdown formatting
       const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
       analysisResult = JSON.parse(cleanContent);
     } catch (parseError) {
       console.error('Failed to parse AI response:', content);
-      // Return empty results on parse error
       return new Response(
         JSON.stringify({ results: [], batch_escalate: false, parse_error: true }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -174,10 +243,11 @@ serve(async (req) => {
       }
     }
 
-    // Update checkpoint
+    // Update checkpoint with activity
     await supabase.from('scan_checkpoints').upsert({
       chat_id,
       last_scanned_at: new Date().toISOString(),
+      last_activity_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }, { onConflict: 'chat_id' });
 
@@ -187,7 +257,7 @@ serve(async (req) => {
       results.some(r => r.risk_score >= 40) ||
       results.some(r => r.escalate) ||
       results.some(r => r.risk_codes?.some(c => 
-        ['MEETUP', 'EXTORTION', 'NUDES_REQUEST', 'ISOLATION'].includes(c)
+        ['MEETUP', 'EXTORTION', 'NUDES_REQUEST', 'ISOLATION', 'GROOMING'].includes(c)
       ));
 
     console.log(`Small Agent complete: ${results.length} signals, batch_escalate=${batchEscalate}, trigger_smart=${shouldTriggerSmart}`);

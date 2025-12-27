@@ -273,8 +273,11 @@ export type Database = {
       }
       findings: {
         Row: {
+          acknowledged: boolean | null
+          acknowledged_at: string | null
           ai_response_encrypted: Json | null
           child_id: string
+          conversation_id: string | null
           created_at: string | null
           explanation: string | null
           handled: boolean | null
@@ -282,13 +285,17 @@ export type Database = {
           id: string
           risk_level: string | null
           scan_id: string
+          severity: string | null
           smart_decision_id: string | null
           threat_detected: boolean
           threat_types: Json | null
         }
         Insert: {
+          acknowledged?: boolean | null
+          acknowledged_at?: string | null
           ai_response_encrypted?: Json | null
           child_id: string
+          conversation_id?: string | null
           created_at?: string | null
           explanation?: string | null
           handled?: boolean | null
@@ -296,13 +303,17 @@ export type Database = {
           id?: string
           risk_level?: string | null
           scan_id: string
+          severity?: string | null
           smart_decision_id?: string | null
           threat_detected?: boolean
           threat_types?: Json | null
         }
         Update: {
+          acknowledged?: boolean | null
+          acknowledged_at?: string | null
           ai_response_encrypted?: Json | null
           child_id?: string
+          conversation_id?: string | null
           created_at?: string | null
           explanation?: string | null
           handled?: boolean | null
@@ -310,6 +321,7 @@ export type Database = {
           id?: string
           risk_level?: string | null
           scan_id?: string
+          severity?: string | null
           smart_decision_id?: string | null
           threat_detected?: boolean
           threat_types?: Json | null
@@ -631,25 +643,31 @@ export type Database = {
         Row: {
           chat_id: string
           id: string
+          last_activity_at: string | null
           last_scanned_at: string | null
           last_smart_at: string | null
           pending_batch_ids: string[] | null
+          scan_interval_minutes: number | null
           updated_at: string | null
         }
         Insert: {
           chat_id: string
           id?: string
+          last_activity_at?: string | null
           last_scanned_at?: string | null
           last_smart_at?: string | null
           pending_batch_ids?: string[] | null
+          scan_interval_minutes?: number | null
           updated_at?: string | null
         }
         Update: {
           chat_id?: string
           id?: string
+          last_activity_at?: string | null
           last_scanned_at?: string | null
           last_smart_at?: string | null
           pending_batch_ids?: string[] | null
+          scan_interval_minutes?: number | null
           updated_at?: string | null
         }
         Relationships: [
@@ -878,6 +896,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      usage_meter: {
+        Row: {
+          child_id: string
+          created_at: string | null
+          est_cost_usd: number | null
+          fallback_calls: number | null
+          id: string
+          image_caption_calls: number | null
+          month_yyyy_mm: string
+          small_calls: number | null
+          smart_calls: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          child_id: string
+          created_at?: string | null
+          est_cost_usd?: number | null
+          fallback_calls?: number | null
+          id?: string
+          image_caption_calls?: number | null
+          month_yyyy_mm: string
+          small_calls?: number | null
+          smart_calls?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          child_id?: string
+          created_at?: string | null
+          est_cost_usd?: number | null
+          fallback_calls?: number | null
+          id?: string
+          image_caption_calls?: number | null
+          month_yyyy_mm?: string
+          small_calls?: number | null
+          smart_calls?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
       }
       user_roles: {
         Row: {

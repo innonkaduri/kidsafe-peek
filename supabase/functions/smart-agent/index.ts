@@ -1,3 +1,4 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -6,11 +7,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// Optimized Smart Agent prompt
+// Token cost estimates (per 1M tokens)
+const GPT41_MINI_INPUT = 0.40;
+const GPT41_MINI_OUTPUT = 1.60;
+const GPT4O_INPUT = 2.50;
+const GPT4O_OUTPUT = 10.00;
+
 const SYSTEM_PROMPT = `SafeKids Smart Context Agent.
 Make contextual safety decision. Patterns > single messages.
 Evidence-based, avoid false positives.
@@ -87,6 +93,83 @@ async function logModelCall(
   }
 }
 
+async function updateUsageMeter(
+  supabase: any,
+  childId: string,
+  callType: 'small' | 'smart' | 'fallback' | 'image_caption',
+  inputTokens: number,
+  outputTokens: number,
+  model: string
+) {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  
+  let estCost = 0;
+  if (model === 'gpt-4.1-mini') {
+    estCost = (inputTokens * GPT41_MINI_INPUT + outputTokens * GPT41_MINI_OUTPUT) / 1_000_000;
+  } else if (model === 'gpt-4o') {
+    estCost = (inputTokens * GPT4O_INPUT + outputTokens * GPT4O_OUTPUT) / 1_000_000;
+  }
+  
+  try {
+    const { data: existing } = await supabase
+      .from('usage_meter')
+      .select('*')
+      .eq('child_id', childId)
+      .eq('month_yyyy_mm', monthKey)
+      .single();
+    
+    if (existing) {
+      const updates: any = {
+        est_cost_usd: (parseFloat(existing.est_cost_usd) || 0) + estCost,
+        updated_at: new Date().toISOString()
+      };
+      
+      if (callType === 'smart') updates.smart_calls = (existing.smart_calls || 0) + 1;
+      if (callType === 'fallback') updates.fallback_calls = (existing.fallback_calls || 0) + 1;
+      
+      await supabase
+        .from('usage_meter')
+        .update(updates)
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('usage_meter').insert({
+        child_id: childId,
+        month_yyyy_mm: monthKey,
+        est_cost_usd: estCost,
+        smart_calls: callType === 'smart' ? 1 : 0,
+        fallback_calls: callType === 'fallback' ? 1 : 0
+      });
+    }
+  } catch (e) {
+    console.error('Failed to update usage meter:', e);
+  }
+}
+
+async function checkBudgetLimit(supabase: any, childId: string): Promise<{ limited: boolean; fallbackAllowed: boolean }> {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  
+  try {
+    const { data } = await supabase
+      .from('usage_meter')
+      .select('*')
+      .eq('child_id', childId)
+      .eq('month_yyyy_mm', monthKey)
+      .single();
+    
+    if (!data) return { limited: false, fallbackAllowed: true };
+    
+    const currentCost = parseFloat(data.est_cost_usd) || 0;
+    const fallbackCalls = data.fallback_calls || 0;
+    
+    return {
+      limited: currentCost > 4.50,
+      fallbackAllowed: fallbackCalls < 30 && currentCost < 5.00
+    };
+  } catch {
+    return { limited: false, fallbackAllowed: true };
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -126,21 +209,21 @@ serve(async (req) => {
       timeframe: { from: timeframe_from, to: timeframe_to }
     };
 
-    // Call Lovable AI (Gemini Flash)
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    // Call OpenAI gpt-4.1-mini
+    const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'gpt-4.1-mini',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: USER_TEMPLATE(metadata, messages, small_agent_results) }
         ],
-        temperature: 0.2,
-        max_tokens: 600
+        max_completion_tokens: 600,
+        response_format: { type: "json_object" }
       })
     });
 
@@ -148,9 +231,9 @@ serve(async (req) => {
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
-      console.error('AI API error:', aiResponse.status, errorText);
+      console.error('OpenAI API error:', aiResponse.status, errorText);
       
-      await logModelCall(supabase, 'smart-agent', 'gemini-2.5-flash', 0, 0, latencyMs, false, child_id, errorText);
+      await logModelCall(supabase, 'smart-agent', 'gpt-4.1-mini', 0, 0, latencyMs, false, child_id, errorText);
       
       if (aiResponse.status === 429) {
         return new Response(JSON.stringify({ error: 'Rate limited, retry later' }), {
@@ -159,7 +242,7 @@ serve(async (req) => {
         });
       }
       
-      throw new Error(`AI API error: ${aiResponse.status}`);
+      throw new Error(`OpenAI API error: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
@@ -170,12 +253,22 @@ serve(async (req) => {
     await logModelCall(
       supabase,
       'smart-agent',
-      'gemini-2.5-flash',
+      'gpt-4.1-mini',
       usage.prompt_tokens || 0,
       usage.completion_tokens || 0,
       latencyMs,
       true,
       child_id
+    );
+
+    // Update usage meter
+    await updateUsageMeter(
+      supabase,
+      child_id,
+      'smart',
+      usage.prompt_tokens || 0,
+      usage.completion_tokens || 0,
+      'gpt-4.1-mini'
     );
 
     // Parse JSON response
@@ -193,6 +286,74 @@ serve(async (req) => {
         key_reasons: ['PARSE_ERROR'],
         evidence_message_ids: []
       };
+    }
+
+    // FALLBACK: If confidence < 0.55 AND action is not ignore, use gpt-4o
+    let usedFallback = false;
+    if (decision.confidence < 0.55 && decision.action !== 'ignore') {
+      const budget = await checkBudgetLimit(supabase, child_id);
+      
+      if (budget.fallbackAllowed) {
+        console.log(`Smart Agent: Low confidence (${decision.confidence}), triggering fallback to gpt-4o`);
+        
+        const fallbackStart = Date.now();
+        const fallbackResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o',
+            messages: [
+              { role: 'system', content: SYSTEM_PROMPT + '\nThis is a FALLBACK verification. Previous model had low confidence. Be thorough.' },
+              { role: 'user', content: USER_TEMPLATE(metadata, messages, small_agent_results) }
+            ],
+            temperature: 0.1,
+            max_tokens: 600,
+            response_format: { type: "json_object" }
+          })
+        });
+
+        const fallbackLatency = Date.now() - fallbackStart;
+
+        if (fallbackResponse.ok) {
+          const fallbackData = await fallbackResponse.json();
+          const fallbackContent = fallbackData.choices?.[0]?.message?.content || '';
+          const fallbackUsage = fallbackData.usage || {};
+          
+          await logModelCall(
+            supabase,
+            'smart-agent-fallback',
+            'gpt-4o',
+            fallbackUsage.prompt_tokens || 0,
+            fallbackUsage.completion_tokens || 0,
+            fallbackLatency,
+            true,
+            child_id
+          );
+
+          await updateUsageMeter(
+            supabase,
+            child_id,
+            'fallback',
+            fallbackUsage.prompt_tokens || 0,
+            fallbackUsage.completion_tokens || 0,
+            'gpt-4o'
+          );
+
+          try {
+            const cleanFallback = fallbackContent.replace(/```json\n?|\n?```/g, '').trim();
+            decision = JSON.parse(cleanFallback);
+            usedFallback = true;
+            console.log(`Fallback complete: risk=${decision.final_risk_score}, confidence=${decision.confidence}`);
+          } catch {
+            console.error('Failed to parse fallback response');
+          }
+        }
+      } else {
+        console.log(`Smart Agent: Fallback skipped due to budget limits`);
+      }
     }
 
     // Store decision in database
@@ -226,15 +387,19 @@ serve(async (req) => {
 
     // If action is 'alert', create a finding
     if (decision.action === 'alert' && smartDecision) {
+      const severity = decision.final_risk_score >= 70 ? 'high' : 
+                       decision.final_risk_score >= 40 ? 'medium' : 'low';
+      
       const { error: findingError } = await supabase.from('findings').insert({
         child_id,
-        scan_id: smartDecision.id, // Using smart_decision id as scan reference
+        scan_id: smartDecision.id,
         threat_detected: true,
-        risk_level: decision.final_risk_score >= 70 ? 'high' : 
-                   decision.final_risk_score >= 40 ? 'medium' : 'low',
+        risk_level: severity,
+        severity,
         threat_types: [decision.threat_type],
         explanation: decision.key_reasons.join(', '),
-        smart_decision_id: smartDecision.id
+        smart_decision_id: smartDecision.id,
+        conversation_id: chat_id
       });
 
       if (findingError) {
@@ -244,13 +409,14 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Smart Agent complete: action=${decision.action}, risk=${decision.final_risk_score}, threat=${decision.threat_type}`);
+    console.log(`Smart Agent complete: action=${decision.action}, risk=${decision.final_risk_score}, threat=${decision.threat_type}, fallback=${usedFallback}`);
 
     return new Response(
       JSON.stringify({
         decision,
         smart_decision_id: smartDecision?.id,
-        latency_ms: latencyMs
+        used_fallback: usedFallback,
+        latency_ms: Date.now() - startTime
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

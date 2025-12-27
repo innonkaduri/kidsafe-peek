@@ -1,3 +1,4 @@
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -6,9 +7,13 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+// Token cost estimates for gpt-4.1-mini (per 1M tokens)
+const INPUT_COST_PER_1M = 0.40;
+const OUTPUT_COST_PER_1M = 1.60;
 
 const CAPTION_PROMPT = `Describe this image in 1-2 neutral sentences for child safety context.
 If concerning content detected, add flags.
@@ -48,6 +53,45 @@ async function logModelCall(
   }
 }
 
+async function updateUsageMeter(
+  supabase: any,
+  childId: string,
+  inputTokens: number,
+  outputTokens: number
+) {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const estCost = (inputTokens * INPUT_COST_PER_1M + outputTokens * OUTPUT_COST_PER_1M) / 1_000_000;
+  
+  try {
+    const { data: existing } = await supabase
+      .from('usage_meter')
+      .select('*')
+      .eq('child_id', childId)
+      .eq('month_yyyy_mm', monthKey)
+      .single();
+    
+    if (existing) {
+      await supabase
+        .from('usage_meter')
+        .update({
+          est_cost_usd: (parseFloat(existing.est_cost_usd) || 0) + estCost,
+          image_caption_calls: (existing.image_caption_calls || 0) + 1,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('usage_meter').insert({
+        child_id: childId,
+        month_yyyy_mm: monthKey,
+        est_cost_usd: estCost,
+        image_caption_calls: 1
+      });
+    }
+  } catch (e) {
+    console.error('Failed to update usage meter:', e);
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -77,26 +121,32 @@ serve(async (req) => {
 
     const childId = message?.child_id || null;
 
-    // Call Lovable AI with vision capability
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    // Call OpenAI gpt-4.1-mini with vision (detail=low for cost savings)
+    const aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'gpt-4.1-mini',
         messages: [
           {
             role: 'user',
             content: [
               { type: 'text', text: CAPTION_PROMPT },
-              { type: 'image_url', image_url: { url: image_url } }
+              { 
+                type: 'image_url', 
+                image_url: { 
+                  url: image_url,
+                  detail: 'low' // Cost optimization
+                } 
+              }
             ]
           }
         ],
-        temperature: 0.3,
-        max_tokens: 200
+        max_completion_tokens: 200,
+        response_format: { type: "json_object" }
       })
     });
 
@@ -104,9 +154,9 @@ serve(async (req) => {
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
-      console.error('AI API error:', aiResponse.status, errorText);
+      console.error('OpenAI API error:', aiResponse.status, errorText);
       
-      await logModelCall(supabase, 'caption-image', 'gemini-2.5-flash', 0, 0, latencyMs, false, childId, errorText);
+      await logModelCall(supabase, 'caption-image', 'gpt-4.1-mini', 0, 0, latencyMs, false, childId, errorText);
       
       if (aiResponse.status === 429) {
         return new Response(JSON.stringify({ error: 'Rate limited' }), {
@@ -115,7 +165,7 @@ serve(async (req) => {
         });
       }
       
-      throw new Error(`AI API error: ${aiResponse.status}`);
+      throw new Error(`OpenAI API error: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
@@ -126,13 +176,23 @@ serve(async (req) => {
     await logModelCall(
       supabase,
       'caption-image',
-      'gemini-2.5-flash',
+      'gpt-4.1-mini',
       usage.prompt_tokens || 0,
       usage.completion_tokens || 0,
       latencyMs,
       true,
       childId
     );
+
+    // Update usage meter
+    if (childId) {
+      await updateUsageMeter(
+        supabase,
+        childId,
+        usage.prompt_tokens || 0,
+        usage.completion_tokens || 0
+      );
+    }
 
     // Parse response
     let caption = '';
@@ -144,7 +204,6 @@ serve(async (req) => {
       caption = parsed.caption || '';
       flags = parsed.flags || [];
     } catch {
-      // If JSON parse fails, use raw content as caption
       caption = content.substring(0, 200);
       flags = [];
     }
