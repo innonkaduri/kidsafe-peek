@@ -7,9 +7,7 @@ import {
   TrendingUp, 
   History, 
   Settings,
-  Link2,
-  Activity,
-  DollarSign
+  Link2
 } from 'lucide-react';
 import { OverviewTab } from './tabs/OverviewTab';
 import { ImportTab } from './tabs/ImportTab';
@@ -19,8 +17,6 @@ import { PatternsTab } from './tabs/PatternsTab';
 import { HistoryTab } from './tabs/HistoryTab';
 import { SettingsTab } from './tabs/SettingsTab';
 import { ConnectorTab } from './tabs/ConnectorTab';
-import { AgentMonitorTab } from './tabs/AgentMonitorTab';
-import { UsageTab } from './tabs/UsageTab';
 import { Child } from '@/types/database';
 
 interface ChildTabsProps {
@@ -64,14 +60,6 @@ export function ChildTabs({ child, onRefresh }: ChildTabsProps) {
           <Settings className="w-4 h-4" />
           הגדרות
         </TabsTrigger>
-        <TabsTrigger value="monitor" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-          <Activity className="w-4 h-4" />
-          ניטור סוכנים
-        </TabsTrigger>
-        <TabsTrigger value="usage" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-          <DollarSign className="w-4 h-4" />
-          שימוש
-        </TabsTrigger>
       </TabsList>
 
       <TabsContent value="overview" className="animate-slide-up">
@@ -104,14 +92,6 @@ export function ChildTabs({ child, onRefresh }: ChildTabsProps) {
 
       <TabsContent value="settings" className="animate-slide-up">
         <SettingsTab child={child} onUpdate={onRefresh} />
-      </TabsContent>
-
-      <TabsContent value="monitor" className="animate-slide-up">
-        <AgentMonitorTab child={child} />
-      </TabsContent>
-
-      <TabsContent value="usage" className="animate-slide-up">
-        <UsageTab child={child} />
       </TabsContent>
     </Tabs>
   );

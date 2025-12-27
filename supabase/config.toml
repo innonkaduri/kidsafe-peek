@@ -23,33 +23,3 @@ verify_jwt = false
 
 [functions.analyze-video]
 verify_jwt = false
-
-[functions.pre-filter]
-verify_jwt = false
-
-[functions.small-agent]
-verify_jwt = false
-
-[functions.smart-agent]
-verify_jwt = false
-
-[functions.ingest-message]
-verify_jwt = false
-
-[functions.caption-image]
-verify_jwt = false
-
-[functions.batch-scan]
-verify_jwt = false
-
-[functions.schedule-scan]
-verify_jwt = false
-
-[functions.budget-check]
-verify_jwt = false
-
-[functions.generate-sample-data]
-verify_jwt = false
-
-[functions.trigger-scan]
-verify_jwt = false
