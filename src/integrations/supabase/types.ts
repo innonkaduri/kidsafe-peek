@@ -282,6 +282,7 @@ export type Database = {
           id: string
           risk_level: string | null
           scan_id: string
+          smart_decision_id: string | null
           threat_detected: boolean
           threat_types: Json | null
         }
@@ -295,6 +296,7 @@ export type Database = {
           id?: string
           risk_level?: string | null
           scan_id: string
+          smart_decision_id?: string | null
           threat_detected?: boolean
           threat_types?: Json | null
         }
@@ -308,6 +310,7 @@ export type Database = {
           id?: string
           risk_level?: string | null
           scan_id?: string
+          smart_decision_id?: string | null
           threat_detected?: boolean
           threat_types?: Json | null
         }
@@ -324,6 +327,13 @@ export type Database = {
             columns: ["scan_id"]
             isOneToOne: false
             referencedRelation: "scans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "findings_smart_decision_id_fkey"
+            columns: ["smart_decision_id"]
+            isOneToOne: false
+            referencedRelation: "smart_decisions"
             referencedColumns: ["id"]
           },
         ]
@@ -408,6 +418,8 @@ export type Database = {
           child_id: string
           created_at: string | null
           id: string
+          image_caption: string | null
+          image_flags: string[] | null
           is_child_sender: boolean | null
           media_thumbnail_url: string | null
           media_url: string | null
@@ -422,6 +434,8 @@ export type Database = {
           child_id: string
           created_at?: string | null
           id?: string
+          image_caption?: string | null
+          image_flags?: string[] | null
           is_child_sender?: boolean | null
           media_thumbnail_url?: string | null
           media_url?: string | null
@@ -436,6 +450,8 @@ export type Database = {
           child_id?: string
           created_at?: string | null
           id?: string
+          image_caption?: string | null
+          image_flags?: string[] | null
           is_child_sender?: boolean | null
           media_thumbnail_url?: string | null
           media_url?: string | null
@@ -455,6 +471,53 @@ export type Database = {
           },
           {
             foreignKeyName: "messages_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      model_logs: {
+        Row: {
+          child_id: string | null
+          created_at: string | null
+          error_message: string | null
+          function_name: string
+          id: string
+          latency_ms: number | null
+          model: string
+          request_tokens: number | null
+          response_tokens: number | null
+          success: boolean | null
+        }
+        Insert: {
+          child_id?: string | null
+          created_at?: string | null
+          error_message?: string | null
+          function_name: string
+          id?: string
+          latency_ms?: number | null
+          model: string
+          request_tokens?: number | null
+          response_tokens?: number | null
+          success?: boolean | null
+        }
+        Update: {
+          child_id?: string | null
+          created_at?: string | null
+          error_message?: string | null
+          function_name?: string
+          id?: string
+          latency_ms?: number | null
+          model?: string
+          request_tokens?: number | null
+          response_tokens?: number | null
+          success?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "model_logs_child_id_fkey"
             columns: ["child_id"]
             isOneToOne: false
             referencedRelation: "children"
@@ -564,6 +627,41 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_checkpoints: {
+        Row: {
+          chat_id: string
+          id: string
+          last_scanned_at: string | null
+          last_smart_at: string | null
+          pending_batch_ids: string[] | null
+          updated_at: string | null
+        }
+        Insert: {
+          chat_id: string
+          id?: string
+          last_scanned_at?: string | null
+          last_smart_at?: string | null
+          pending_batch_ids?: string[] | null
+          updated_at?: string | null
+        }
+        Update: {
+          chat_id?: string
+          id?: string
+          last_scanned_at?: string | null
+          last_smart_at?: string | null
+          pending_batch_ids?: string[] | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scan_checkpoints_chat_id_fkey"
+            columns: ["chat_id"]
+            isOneToOne: true
+            referencedRelation: "chats"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       scans: {
         Row: {
           child_id: string
@@ -604,6 +702,101 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "scans_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      small_signals: {
+        Row: {
+          created_at: string | null
+          escalate: boolean | null
+          id: string
+          message_id: string
+          risk_codes: string[] | null
+          risk_score: number
+        }
+        Insert: {
+          created_at?: string | null
+          escalate?: boolean | null
+          id?: string
+          message_id: string
+          risk_codes?: string[] | null
+          risk_score: number
+        }
+        Update: {
+          created_at?: string | null
+          escalate?: boolean | null
+          id?: string
+          message_id?: string
+          risk_codes?: string[] | null
+          risk_score?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "small_signals_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      smart_decisions: {
+        Row: {
+          action: string
+          chat_id: string
+          child_id: string
+          confidence: number | null
+          created_at: string | null
+          evidence_message_ids: string[] | null
+          final_risk_score: number
+          id: string
+          key_reasons: string[] | null
+          threat_type: string | null
+          timeframe_from: string
+          timeframe_to: string
+        }
+        Insert: {
+          action: string
+          chat_id: string
+          child_id: string
+          confidence?: number | null
+          created_at?: string | null
+          evidence_message_ids?: string[] | null
+          final_risk_score: number
+          id?: string
+          key_reasons?: string[] | null
+          threat_type?: string | null
+          timeframe_from: string
+          timeframe_to: string
+        }
+        Update: {
+          action?: string
+          chat_id?: string
+          child_id?: string
+          confidence?: number | null
+          created_at?: string | null
+          evidence_message_ids?: string[] | null
+          final_risk_score?: number
+          id?: string
+          key_reasons?: string[] | null
+          threat_type?: string | null
+          timeframe_from?: string
+          timeframe_to?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "smart_decisions_chat_id_fkey"
+            columns: ["chat_id"]
+            isOneToOne: false
+            referencedRelation: "chats"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "smart_decisions_child_id_fkey"
             columns: ["child_id"]
             isOneToOne: false
             referencedRelation: "children"
