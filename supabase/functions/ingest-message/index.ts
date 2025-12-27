@@ -1,8 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -23,6 +21,8 @@ interface IngestRequest {
   audio_transcript?: string;
 }
 
+declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -40,8 +40,7 @@ serve(async (req) => {
       timestamp,
       text,
       image_url,
-      audio_url,
-      audio_transcript
+      audio_url
     } = request;
 
     if (!child_id || !chat_id || !sender_role || !timestamp) {
@@ -108,150 +107,17 @@ serve(async (req) => {
       })());
     }
 
-    // Run pre-filter
-    const preFilterResponse = await fetch(`${SUPABASE_URL}/functions/v1/pre-filter`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messages: [{
-          id: message.id,
-          text_content: text,
-          image_caption: null,
-          sender_label,
-          is_child_sender: sender_role === 'child'
-        }]
-      })
-    });
-
-    let preFilterResult: { results: Array<{ priority?: string }>, summary: { suspicious: number } } = { results: [], summary: { suspicious: 0 } };
-    if (preFilterResponse.ok) {
-      preFilterResult = await preFilterResponse.json();
-    }
-
-    const isSuspicious = preFilterResult.summary?.suspicious > 0;
-    const filterResult = preFilterResult.results?.[0];
-
-    // If suspicious, trigger immediate Small Agent scan
-    if (isSuspicious && filterResult?.priority === 'immediate') {
-      console.log(`Suspicious message detected, triggering Small Agent for chat ${chat_id}`);
-      
-      EdgeRuntime.waitUntil((async () => {
-        try {
-          // Get child age
-          const { data: child } = await supabase
-            .from('children')
-            .select('age_range')
-            .eq('id', child_id)
-            .single();
-          
-          const childAge = child?.age_range ? parseInt(child.age_range.split('-')[0]) || 12 : 12;
-          
-          // Call Small Agent
-          const smallAgentResponse = await fetch(`${SUPABASE_URL}/functions/v1/small-agent`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              chat_id,
-              child_id,
-              child_age: childAge,
-              messages: [{
-                id: message.id,
-                sender_role,
-                timestamp,
-                text: text || '',
-                image_caption: null,
-                has_audio: !!audio_url
-              }]
-            })
-          });
-          
-          if (smallAgentResponse.ok) {
-            const smallResult = await smallAgentResponse.json();
-            
-            // If should trigger Smart Agent
-            if (smallResult.should_trigger_smart) {
-              console.log(`Triggering Smart Agent for chat ${chat_id}`);
-              
-              // Get recent messages for context
-              const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-              const { data: recentMessages } = await supabase
-                .from('messages')
-                .select('*')
-                .eq('chat_id', chat_id)
-                .gte('message_timestamp', oneHourAgo)
-                .order('message_timestamp', { ascending: true })
-                .limit(50);
-              
-              // Get small signals for these messages
-              const messageIds = recentMessages?.map(m => m.id) || [];
-              const { data: signals } = await supabase
-                .from('small_signals')
-                .select('*')
-                .in('message_id', messageIds);
-              
-              await fetch(`${SUPABASE_URL}/functions/v1/smart-agent`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  chat_id,
-                  child_id,
-                  child_age: childAge,
-                  timeframe_from: oneHourAgo,
-                  timeframe_to: new Date().toISOString(),
-                  messages: recentMessages?.map(m => ({
-                    id: m.id,
-                    sender_role: m.is_child_sender ? 'child' : 'other',
-                    timestamp: m.message_timestamp,
-                    text: m.text_content || '',
-                    image_caption: m.image_caption,
-                    audio_transcript: null,
-                    has_audio: m.msg_type === 'audio'
-                  })) || [],
-                  small_agent_results: signals?.map(s => ({
-                    message_id: s.message_id,
-                    risk_score: s.risk_score,
-                    risk_codes: s.risk_codes,
-                    escalate: s.escalate
-                  })) || []
-                })
-              });
-            }
-          }
-        } catch (e) {
-          console.error('Small Agent background task error:', e);
-        }
-      })());
-    } else {
-    // Add to batch queue for hourly scan
-      const { data: existing } = await supabase
-        .from('scan_checkpoints')
-        .select('pending_batch_ids')
-        .eq('chat_id', chat_id)
-        .maybeSingle();
-      
-      const currentIds = existing?.pending_batch_ids || [];
-      await supabase.from('scan_checkpoints').upsert({
-        chat_id,
-        pending_batch_ids: [...currentIds, message.id],
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'chat_id' });
-    }
+    // Update last activity timestamp for the chat checkpoint
+    await supabase.from('scan_checkpoints').upsert({
+      chat_id,
+      last_activity_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'chat_id' });
 
     return new Response(
       JSON.stringify({
         success: true,
-        message_id: message.id,
-        is_suspicious: isSuspicious,
-        pre_filter: filterResult
+        message_id: message.id
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

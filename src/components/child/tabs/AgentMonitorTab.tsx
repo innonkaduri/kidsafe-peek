@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import { 
   Bot, 
   Brain, 
@@ -16,7 +18,9 @@ import {
   DollarSign,
   Activity,
   Zap,
-  TrendingUp
+  TrendingUp,
+  Play,
+  Loader2
 } from "lucide-react";
 import { format } from "date-fns";
 import { he } from "date-fns/locale";
@@ -83,12 +87,32 @@ export const AgentMonitorTab = ({ child }: AgentMonitorTabProps) => {
   const [usage, setUsage] = useState<UsageMeter | null>(null);
   const [checkpoints, setCheckpoints] = useState<ScanCheckpoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);
 
   const BUDGET_LIMIT = 5.00;
 
   useEffect(() => {
     fetchAllData();
   }, [child.id]);
+
+  const triggerManualScan = async () => {
+    setScanning(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('trigger-scan', {
+        body: { child_id: child.id }
+      });
+
+      if (error) throw error;
+
+      toast.success(`סריקה הושלמה: ${data.small_scans} קריאות Small, ${data.smart_scans} קריאות Smart`);
+      await fetchAllData();
+    } catch (error) {
+      console.error('Scan error:', error);
+      toast.error('שגיאה בהפעלת הסריקה');
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const fetchAllData = async () => {
     setLoading(true);
@@ -194,6 +218,30 @@ export const AgentMonitorTab = ({ child }: AgentMonitorTabProps) => {
 
   return (
     <div className="space-y-6" dir="rtl">
+      {/* Scan Now Button */}
+      <div className="flex justify-between items-center">
+        <div className="text-sm text-muted-foreground">
+          סריקה אוטומטית כל 10 דקות
+        </div>
+        <Button 
+          onClick={triggerManualScan} 
+          disabled={scanning}
+          className="gap-2"
+        >
+          {scanning ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              סורק...
+            </>
+          ) : (
+            <>
+              <Play className="h-4 w-4" />
+              סרוק עכשיו
+            </>
+          )}
+        </Button>
+      </div>
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
