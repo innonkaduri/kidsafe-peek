@@ -41,3 +41,12 @@ verify_jwt = false
 
 [functions.batch-scan]
 verify_jwt = false
+
+[functions.schedule-scan]
+verify_jwt = false
+
+[functions.budget-check]
+verify_jwt = false
+
+[functions.generate-sample-data]
+verify_jwt = false
