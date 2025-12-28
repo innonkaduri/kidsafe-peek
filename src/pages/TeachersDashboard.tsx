@@ -50,59 +50,49 @@ export default function TeachersDashboard() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
 
   const fetchData = useCallback(async () => {
-    if (!user) return;
+    if (!user?.email) return;
 
     setLoading(true);
 
-    // Fetch children
-    const { data: childrenData } = await supabase
-      .from('children')
-      .select('id, display_name, age_range')
-      .eq('user_id', user.id);
+    // Fetch alerts where this user is the teacher (by email)
+    // RLS policy already filters by teacher_email = auth.email
+    const { data: alertsData, error } = await supabase
+      .from('teacher_alerts')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    if (childrenData) {
-      const childIds = childrenData.map(c => c.id);
+    if (error) {
+      console.error('Error fetching teacher alerts:', error);
+      setLoading(false);
+      return;
+    }
 
-      // Fetch findings count per child
-      const childrenWithCounts: ChildWithStatus[] = [];
+    if (alertsData && alertsData.length > 0) {
+      // Fetch child names for the alerts
+      const childIds = [...new Set(alertsData.map(a => a.child_id))];
+      const { data: childrenData } = await supabase
+        .from('children')
+        .select('id, display_name, age_range')
+        .in('id', childIds);
+
+      const alertsWithNames = alertsData.map(a => ({
+        ...a,
+        child_name: childrenData?.find(c => c.id === a.child_id)?.display_name || 'תלמיד'
+      }));
       
-      for (const child of childrenData) {
-        const { count: findingsCount } = await supabase
-          .from('findings')
-          .select('*', { count: 'exact', head: true })
-          .eq('child_id', child.id)
-          .eq('threat_detected', true);
+      setTeacherAlerts(alertsWithNames);
 
-        const { count: alertsCount } = await supabase
-          .from('teacher_alerts')
-          .select('*', { count: 'exact', head: true })
-          .eq('child_id', child.id);
-
-        childrenWithCounts.push({
-          ...child,
-          findings_count: findingsCount || 0,
-          alerts_sent: alertsCount || 0
-        });
-      }
+      // Build children with status from alerts data
+      const childrenWithCounts: ChildWithStatus[] = childrenData?.map(child => ({
+        ...child,
+        findings_count: 0,
+        alerts_sent: alertsData.filter(a => a.child_id === child.id).length
+      })) || [];
 
       setChildrenWithStatus(childrenWithCounts);
-
-      // Fetch teacher alerts
-      if (childIds.length > 0) {
-        const { data: alertsData } = await supabase
-          .from('teacher_alerts')
-          .select('*')
-          .in('child_id', childIds)
-          .order('created_at', { ascending: false });
-
-        if (alertsData) {
-          const alertsWithNames = alertsData.map(a => ({
-            ...a,
-            child_name: childrenData.find(c => c.id === a.child_id)?.display_name || 'לא ידוע'
-          }));
-          setTeacherAlerts(alertsWithNames);
-        }
-      }
+    } else {
+      setTeacherAlerts([]);
+      setChildrenWithStatus([]);
     }
 
     setLoading(false);
