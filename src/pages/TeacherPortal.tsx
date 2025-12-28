@@ -61,6 +61,7 @@ const CATEGORY_OPTIONS = [
   { value: 'sexual_content', label: 'תוכן מיני' },
   { value: 'violence', label: 'אלימות' },
   { value: 'emotional_distress', label: 'מצוקה רגשית' },
+  { value: 'harassment_bullying', label: 'הטרדה/בריונות' },
 ];
 
 const SORT_OPTIONS = [
@@ -99,6 +100,8 @@ export default function TeacherPortal() {
 
   const fetchAlerts = async () => {
     try {
+      // RLS policy filters by teacher_email automatically
+      // Teachers can only see alerts sent to their email
       const { data, error } = await supabase
         .from('teacher_alerts')
         .select(`
@@ -225,7 +228,7 @@ export default function TeacherPortal() {
         {/* Header */}
         <div>
           <h1 className="text-3xl font-heebo font-bold text-foreground">דשבורד מורים</h1>
-          <p className="text-muted-foreground mt-1">ניהול התראות ואירועים מהורים</p>
+          <p className="text-muted-foreground mt-1">התראות שנשלחו אליך מהורים</p>
         </div>
 
         {/* Stats Cards */}
@@ -238,7 +241,7 @@ export default function TeacherPortal() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-foreground">{stats.total}</p>
-                  <p className="text-xs text-muted-foreground">סה״כ טיקטים</p>
+                  <p className="text-xs text-muted-foreground">סה״כ התראות</p>
                 </div>
               </div>
             </CardContent>
@@ -252,7 +255,7 @@ export default function TeacherPortal() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold text-foreground">{stats.pending}</p>
-                  <p className="text-xs text-muted-foreground">פתוחים</p>
+                  <p className="text-xs text-muted-foreground">פתוחות</p>
                 </div>
               </div>
             </CardContent>
@@ -356,6 +359,7 @@ export default function TeacherPortal() {
             <Card className="bg-card/50 border-border/50">
               <CardContent className="p-8 text-center">
                 <p className="text-muted-foreground">לא נמצאו התראות</p>
+                <p className="text-sm text-muted-foreground mt-2">התראות שיישלחו אליך מהורים יופיעו כאן</p>
               </CardContent>
             </Card>
           ) : (

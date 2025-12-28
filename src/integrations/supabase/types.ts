@@ -822,6 +822,44 @@ export type Database = {
           },
         ]
       }
+      teacher_alert_messages: {
+        Row: {
+          alert_id: string
+          created_at: string
+          id: string
+          message: string
+          read_at: string | null
+          sender_type: string
+          sender_user_id: string
+        }
+        Insert: {
+          alert_id: string
+          created_at?: string
+          id?: string
+          message: string
+          read_at?: string | null
+          sender_type: string
+          sender_user_id: string
+        }
+        Update: {
+          alert_id?: string
+          created_at?: string
+          id?: string
+          message?: string
+          read_at?: string | null
+          sender_type?: string
+          sender_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "teacher_alert_messages_alert_id_fkey"
+            columns: ["alert_id"]
+            isOneToOne: false
+            referencedRelation: "teacher_alerts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       teacher_alerts: {
         Row: {
           action_taken: string | null

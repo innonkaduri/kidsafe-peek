@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { TeacherChatSection } from './TeacherChatSection';
 
 interface Trigger {
   messageId: string;
@@ -78,6 +79,8 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
   const [isSharingWithTeacher, setIsSharingWithTeacher] = useState(false);
   const [teacherEmail, setTeacherEmail] = useState<string | null>(null);
   const [messages, setMessages] = useState<MessageInfo[]>([]);
+  const [teacherAlertId, setTeacherAlertId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [fullFinding, setFullFinding] = useState<Finding | null>(null);
 
@@ -85,8 +88,25 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     if (finding && open) {
       fetchFullFinding();
       fetchTeacherEmail();
+      fetchTeacherAlert();
+      fetchUserId();
     }
   }, [finding, open]);
+
+  const fetchUserId = async () => {
+    const { data } = await supabase.auth.getSession();
+    setUserId(data.session?.user?.id || null);
+  };
+
+  const fetchTeacherAlert = async () => {
+    if (!finding) return;
+    const { data } = await supabase
+      .from('teacher_alerts')
+      .select('id')
+      .eq('finding_id', finding.id)
+      .maybeSingle();
+    setTeacherAlertId(data?.id || null);
+  };
 
   const fetchFullFinding = async () => {
     if (!finding) return;
@@ -517,6 +537,18 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
               </p>
             </div>
           </div>
+
+          {/* Teacher Chat Section - show if alert was shared */}
+          {teacherAlertId && userId && teacherEmail && (
+            <>
+              <Separator className="bg-border" />
+              <TeacherChatSection
+                alertId={teacherAlertId}
+                userId={userId}
+                teacherEmail={teacherEmail}
+              />
+            </>
+          )}
 
           <Separator className="bg-border" />
 
