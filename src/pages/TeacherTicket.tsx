@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, User, Calendar, Tag, AlertTriangle, MessageSquare, Clock, Loader2, Send } from 'lucide-react';
+import { ArrowRight, User, Calendar, Tag, AlertTriangle, MessageSquare, Clock, Loader2, Send, CheckCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useRole } from '@/hooks/useRole';
@@ -20,6 +20,16 @@ interface TimelineEvent {
   timestamp: string;
   by?: string;
   details?: string;
+}
+
+interface AlertMessage {
+  id: string;
+  alert_id: string;
+  sender_type: string;
+  sender_user_id: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
 }
 
 interface TeacherAlert {
@@ -62,7 +72,7 @@ const STATUS_OPTIONS = [
 const CATEGORY_LABELS: Record<string, string> = {
   bullying: 'חרם', profanity: 'קללות', exclusion: 'הדרה חברתית', threats: 'איומים',
   self_image: 'פגיעה בדימוי עצמי', substances: 'אלכוהול / סמים', sexual_content: 'תוכן מיני',
-  violence: 'אלימות', emotional_distress: 'מצוקה רגשית',
+  violence: 'אלימות', emotional_distress: 'מצוקה רגשית', harassment_bullying: 'הטרדה/בריונות',
 };
 
 const SEVERITY_CONFIG: Record<string, { label: string; className: string }> = {
@@ -77,20 +87,63 @@ export default function TeacherTicket() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const { activeRole } = useRole();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const [alert, setAlert] = useState<TeacherAlert | null>(null);
+  const [messages, setMessages] = useState<AlertMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
+  
+  // Response form
   const [teacherResponse, setTeacherResponse] = useState('');
   const [actionTaken, setActionTaken] = useState('');
   const [newStatus, setNewStatus] = useState('responded');
   const [internalNotes, setInternalNotes] = useState('');
+  
+  // New message input
+  const [newMessage, setNewMessage] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) { navigate('/auth'); return; }
     if (user && activeRole !== 'teacher') { navigate('/'); return; }
-    if (user && ticketId) fetchAlert();
+    if (user && ticketId) {
+      fetchAlert();
+      fetchMessages();
+      setupRealtimeSubscription();
+    }
   }, [user, authLoading, activeRole, ticketId, navigate]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const setupRealtimeSubscription = () => {
+    const channel = supabase
+      .channel(`alert-messages-${ticketId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'teacher_alert_messages',
+          filter: `alert_id=eq.${ticketId}`
+        },
+        (payload) => {
+          const newMsg = payload.new as AlertMessage;
+          setMessages(prev => [...prev, newMsg]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  };
 
   const fetchAlert = async () => {
     try {
@@ -115,6 +168,45 @@ export default function TeacherTicket() {
     } finally { setLoading(false); }
   };
 
+  const fetchMessages = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('teacher_alert_messages')
+        .select('*')
+        .eq('alert_id', ticketId)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      setMessages(data || []);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !user || !ticketId) return;
+
+    setSendingMessage(true);
+    try {
+      const { error } = await supabase
+        .from('teacher_alert_messages')
+        .insert({
+          alert_id: ticketId,
+          sender_type: 'teacher',
+          sender_user_id: user.id,
+          message: newMessage.trim()
+        });
+
+      if (error) throw error;
+      setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      toast({ title: 'שגיאה', description: 'אירעה שגיאה בשליחת ההודעה', variant: 'destructive' });
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
   const handleSubmitResponse = async () => {
     if (!alert || !teacherResponse.trim()) {
       toast({ title: 'שגיאה', description: 'יש להזין משוב להורה', variant: 'destructive' });
@@ -135,6 +227,15 @@ export default function TeacherTicket() {
         .eq('id', alert.id);
 
       if (error) throw error;
+      
+      // Also add the response as a message
+      await supabase.from('teacher_alert_messages').insert({
+        alert_id: alert.id,
+        sender_type: 'teacher',
+        sender_user_id: user!.id,
+        message: `✅ סטטוס: ${STATUS_OPTIONS.find(s => s.value === newStatus)?.label || newStatus}\n\n${teacherResponse}`
+      });
+
       toast({ title: 'המשוב נשלח בהצלחה', description: 'ההורה יקבל הודעה על המשוב שלך' });
       navigate('/teacher-portal');
     } catch (error) {
@@ -175,16 +276,75 @@ export default function TeacherTicket() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex items-center gap-2"><User className="w-4 h-4 text-muted-foreground" /><div><p className="text-xs text-muted-foreground">שם הילד</p><p className="font-medium text-foreground">{alert.children?.display_name || 'לא ידוע'}</p></div></div>
                   <div className="flex items-center gap-2"><Calendar className="w-4 h-4 text-muted-foreground" /><div><p className="text-xs text-muted-foreground">תאריך יצירה</p><p className="font-medium text-foreground">{format(new Date(alert.created_at), 'dd/MM/yyyy HH:mm', { locale: he })}</p></div></div>
-                  <div className="flex items-center gap-2"><Tag className="w-4 h-4 text-muted-foreground" /><div><p className="text-xs text-muted-foreground">קטגוריה</p><p className="font-medium text-foreground">{CATEGORY_LABELS[alert.category || ''] || 'לא מוגדר'}</p></div></div>
+                  <div className="flex items-center gap-2"><Tag className="w-4 h-4 text-muted-foreground" /><div><p className="text-xs text-muted-foreground">קטגוריה</p><p className="font-medium text-foreground">{CATEGORY_LABELS[alert.category || ''] || alert.category || 'לא מוגדר'}</p></div></div>
                   <div className="flex items-center gap-2"><MessageSquare className="w-4 h-4 text-muted-foreground" /><div><p className="text-xs text-muted-foreground">שותף ע״י</p><p className="font-medium text-foreground">{alert.parent_profile?.full_name || alert.parent_profile?.email || 'הורה'}</p></div></div>
                 </div>
                 <div className="pt-4 border-t border-border/50"><h4 className="text-sm font-medium text-muted-foreground mb-2">תקציר ההתראה</h4><p className="text-foreground bg-background/50 p-4 rounded-xl">{alert.parent_message || 'אין הודעה מההורה'}</p></div>
-                <div className="pt-4 border-t border-border/50"><h4 className="text-sm font-medium text-muted-foreground mb-2">אינדיקטורים לסיכון</h4><div className="flex flex-wrap gap-2"><Badge variant="secondary">{CATEGORY_LABELS[alert.category || ''] || 'כללי'}</Badge>{(alert.severity === 'high' || alert.severity === 'critical') && <Badge variant="secondary" className="bg-red-500/20 text-red-400">דורש תשומת לב</Badge>}</div></div>
+                <div className="pt-4 border-t border-border/50"><h4 className="text-sm font-medium text-muted-foreground mb-2">אינדיקטורים לסיכון</h4><div className="flex flex-wrap gap-2"><Badge variant="secondary">{CATEGORY_LABELS[alert.category || ''] || alert.category || 'כללי'}</Badge>{(alert.severity === 'high' || alert.severity === 'critical') && <Badge variant="secondary" className="bg-red-500/20 text-red-400">דורש תשומת לב</Badge>}</div></div>
               </CardContent>
             </Card>
 
+            {/* Messages Chat */}
             <Card className="bg-card/50 border-border/50">
-              <CardHeader><CardTitle className="flex items-center gap-2"><MessageSquare className="w-5 h-5" />משוב למורה</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="flex items-center gap-2"><MessageSquare className="w-5 h-5" />שיחה עם ההורה</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                <div className="h-64 overflow-y-auto p-3 bg-background/50 rounded-xl space-y-3">
+                  {messages.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      <p>אין הודעות עדיין</p>
+                      <p className="mt-1">שלח הודעה להורה להתחיל שיחה</p>
+                    </div>
+                  ) : (
+                    messages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`flex ${msg.sender_type === 'teacher' ? 'justify-start' : 'justify-end'}`}
+                      >
+                        <div
+                          className={`max-w-[80%] p-3 rounded-xl ${
+                            msg.sender_type === 'teacher'
+                              ? 'bg-primary/20 text-foreground'
+                              : 'bg-muted text-foreground'
+                          }`}
+                        >
+                          <p className="text-sm whitespace-pre-wrap">{msg.message}</p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {format(new Date(msg.created_at), 'HH:mm', { locale: he })}
+                          </p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+                
+                <div className="flex gap-2">
+                  <Textarea
+                    placeholder="כתוב הודעה להורה..."
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    className="min-h-[60px] bg-background/50 flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                  />
+                  <Button
+                    onClick={handleSendMessage}
+                    disabled={sendingMessage || !newMessage.trim()}
+                    className="self-end"
+                  >
+                    {sendingMessage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Response Form */}
+            <Card className="bg-card/50 border-border/50">
+              <CardHeader><CardTitle className="flex items-center gap-2"><CheckCircle className="w-5 h-5" />סמן כטופל ושלח משוב</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <div><Label htmlFor="response">משוב להורה</Label><Textarea id="response" placeholder="כתוב משוב להורה..." value={teacherResponse} onChange={(e) => setTeacherResponse(e.target.value)} className="mt-1.5 min-h-[120px] bg-background/50" /></div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -192,7 +352,7 @@ export default function TeacherTicket() {
                   <div><Label>סטטוס טיפול</Label><Select value={newStatus} onValueChange={setNewStatus}><SelectTrigger className="mt-1.5 bg-background/50"><SelectValue placeholder="בחר סטטוס" /></SelectTrigger><SelectContent>{STATUS_OPTIONS.map(opt => <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>)}</SelectContent></Select></div>
                 </div>
                 <div><Label htmlFor="notes">הערות פנימיות (לא נשלח להורה)</Label><Textarea id="notes" placeholder="הערות פנימיות..." value={internalNotes} onChange={(e) => setInternalNotes(e.target.value)} className="mt-1.5 min-h-[80px] bg-background/50" /></div>
-                <Button className="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white" onClick={handleSubmitResponse} disabled={submitting || !teacherResponse.trim()}>{submitting ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : <Send className="w-4 h-4 ml-2" />}שלח משוב להורה וסמן כטופל</Button>
+                <Button className="w-full bg-gradient-to-r from-green-500 to-emerald-600 text-white" onClick={handleSubmitResponse} disabled={submitting || !teacherResponse.trim()}>{submitting ? <Loader2 className="w-4 h-4 animate-spin ml-2" /> : <CheckCircle className="w-4 h-4 ml-2" />}סמן כטופל ושלח משוב להורה</Button>
               </CardContent>
             </Card>
           </div>
