@@ -13,6 +13,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 interface TeacherAlert {
   id: string;
@@ -106,6 +107,60 @@ export default function TeachersDashboard() {
 
     fetchData();
   }, [user, authLoading, navigate, fetchData]);
+
+  // Real-time subscription for new alerts
+  useEffect(() => {
+    if (!user?.email) return;
+
+    const channel = supabase
+      .channel('teacher-alerts-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'teacher_alerts'
+        },
+        async (payload) => {
+          // Fetch child name for the new alert
+          const newAlert = payload.new as TeacherAlert;
+          const { data: childData } = await supabase
+            .from('children')
+            .select('display_name')
+            .eq('id', newAlert.child_id)
+            .maybeSingle();
+
+          const alertWithName = {
+            ...newAlert,
+            child_name: childData?.display_name || 'תלמיד'
+          };
+
+          setTeacherAlerts(prev => [alertWithName, ...prev]);
+          toast.info(`התקבלה התראה חדשה על ${alertWithName.child_name}`, {
+            duration: 5000,
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'teacher_alerts'
+        },
+        (payload) => {
+          const updatedAlert = payload.new as TeacherAlert;
+          setTeacherAlerts(prev => 
+            prev.map(a => a.id === updatedAlert.id ? { ...a, ...updatedAlert } : a)
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.email]);
 
   // Calculate stats
   const totalAlerts = teacherAlerts.length;

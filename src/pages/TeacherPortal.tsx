@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Filter, Clock, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { format } from 'date-fns';
 import { he } from 'date-fns/locale';
+import { toast } from 'sonner';
 
 interface TeacherAlert {
   id: string;
@@ -98,7 +99,7 @@ export default function TeacherPortal() {
     }
   }, [user, authLoading, activeRole, navigate]);
 
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async () => {
     try {
       // RLS policy filters by teacher_email automatically
       // Teachers can only see alerts sent to their email
@@ -130,7 +131,62 @@ export default function TeacherPortal() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // Real-time subscription for new alerts
+  useEffect(() => {
+    if (!user?.email) return;
+
+    const channel = supabase
+      .channel('teacher-portal-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'teacher_alerts'
+        },
+        async (payload) => {
+          // Fetch full alert data with child and parent info
+          const newAlert = payload.new as TeacherAlert;
+          
+          const [{ data: childData }, { data: profile }] = await Promise.all([
+            supabase.from('children').select('display_name, age_range').eq('id', newAlert.child_id).maybeSingle(),
+            supabase.from('profiles').select('full_name, email').eq('id', newAlert.parent_user_id).maybeSingle()
+          ]);
+
+          const alertWithDetails: TeacherAlert = {
+            ...newAlert,
+            children: childData,
+            parent_profile: profile
+          };
+
+          setAlerts(prev => [alertWithDetails, ...prev]);
+          toast.info(`התקבלה התראה חדשה על ${childData?.display_name || 'תלמיד'}`, {
+            duration: 5000,
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'teacher_alerts'
+        },
+        (payload) => {
+          const updatedAlert = payload.new as TeacherAlert;
+          setAlerts(prev => 
+            prev.map(a => a.id === updatedAlert.id ? { ...a, ...updatedAlert } : a)
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.email]);
 
   const filteredAlerts = useMemo(() => {
     let result = [...alerts];
