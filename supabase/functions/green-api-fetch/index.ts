@@ -273,12 +273,6 @@ serve(async (req) => {
         }
 
         const messages: GreenAPIMessage[] = await messagesResponse.json();
-
-        // Track media fetch count to limit API calls - reduced for timeout prevention
-        let mediaFetchCount = 0;
-        const MAX_MEDIA_PER_CHAT = 10; // Reduced from 50 to prevent timeout
-        let debugLogCount = 0;
-
         console.log(`Processing ${messages.length} messages for chat ${chat.id}`);
         
         // Check timeout before processing messages
@@ -287,115 +281,96 @@ serve(async (req) => {
           break;
         }
 
+        // OPTIMIZATION: Batch check existing messages to reduce DB queries
+        const timestamps = messages.map(m => new Date(m.timestamp * 1000).toISOString());
+        const { data: existingMessages } = await supabase
+          .from("messages")
+          .select("id, media_url, message_timestamp")
+          .eq("chat_id", dbChat.id)
+          .in("message_timestamp", timestamps);
+
+        const existingMap = new Map(
+          (existingMessages || []).map(m => [m.message_timestamp, m])
+        );
+
+        // Collect messages to insert in batch
+        const messagesToInsert: any[] = [];
+        
+        // Limit media fetches even more aggressively
+        let mediaFetchCount = 0;
+        const MAX_MEDIA_FETCHES = 3; // Very limited to prevent timeout
+
         for (const msg of messages) {
-          // Detect message type
-          const messageType = msg.typeMessage || msg.type;
-          const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(messageType);
+          const messageTimestamp = new Date(msg.timestamp * 1000).toISOString();
+          const existingMsg = existingMap.get(messageTimestamp);
 
-          // Debug log first 3 media messages per chat
-          if (isMediaMessage && debugLogCount < 3) {
-            console.log(`DEBUG media msg: type=${messageType}, idMessage=${msg.idMessage || 'MISSING'}, chatId=${msg.chatId || 'MISSING'}, downloadUrl=${msg.downloadUrl || 'MISSING'}, keys=${Object.keys(msg).join(',')}`);
-            debugLogCount++;
-          }
-
-          // For media messages without downloadUrl, fetch it using downloadFile API
-          if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_PER_CHAT && msg.idMessage) {
-            try {
-              // Use msg.chatId if available, fallback to chat.id
-              const chatIdForDownload = msg.chatId || chat.id;
-              console.log(`Fetching downloadUrl for ${msg.idMessage} (type: ${messageType}, chatId: ${chatIdForDownload})`);
-              
-              const downloadResponse = await fetchWithRetry(`${baseUrl}/downloadFile/${apiToken}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                  chatId: chatIdForDownload, 
-                  idMessage: msg.idMessage 
-                }),
-              });
-
-              const responseText = await downloadResponse.text();
-              
-              if (downloadResponse.ok) {
-                try {
-                  const downloadData = JSON.parse(responseText);
-                  if (downloadData.downloadUrl) {
-                    msg.downloadUrl = downloadData.downloadUrl;
-                    console.log(`SUCCESS: Got downloadUrl for ${msg.idMessage}: ${downloadData.downloadUrl.substring(0, 100)}...`);
-                  } else {
-                    console.log(`No downloadUrl in response for ${msg.idMessage}. Response:`, responseText.substring(0, 200));
-                  }
-                } catch (parseError) {
-                  console.log(`Failed to parse downloadFile response for ${msg.idMessage}:`, responseText.substring(0, 200));
-                }
-              } else {
-                console.log(`downloadFile API failed for ${msg.idMessage}: status=${downloadResponse.status}, body=${responseText.substring(0, 200)}`);
-              }
-              
-              mediaFetchCount++;
-              // Reduced delay to prevent timeout
-              await new Promise(resolve => setTimeout(resolve, 50));
-            } catch (downloadError) {
-              console.error(`Error fetching downloadUrl for ${msg.idMessage}:`, downloadError);
-            }
-          }
-
-          // Log media result
-          if (isMediaMessage) {
-            console.log(`Media result: type=${messageType}, hasUrl=${!!msg.downloadUrl}, hasThumbnail=${!!msg.jpegThumbnail}`);
-          }
-
-          // Check if message already exists
-          const { data: existingMsg } = await supabase
-            .from("messages")
-            .select("id, media_url")
-            .eq("chat_id", dbChat.id)
-            .eq("message_timestamp", new Date(msg.timestamp * 1000).toISOString())
-            .maybeSingle();
-
-          // If message exists but missing media_url, update it
+          // Skip if message exists (no media URL updates to save time)
           if (existingMsg) {
-            if (!existingMsg.media_url && msg.downloadUrl) {
-              console.log(`Updating existing message ${existingMsg.id} with media_url`);
-              await supabase.from("messages")
-                .update({
-                  media_url: msg.downloadUrl,
-                  media_thumbnail_url: msg.jpegThumbnail || null,
-                })
-                .eq("id", existingMsg.id);
-            }
             continue;
           }
 
-          let msgType = "text";
-          let textContent = sanitizeText(msg.textMessage || msg.caption || "");
-
-          // Detect message type from type or typeMessage field
+          // Detect message type
           const msgTypeDetect = msg.typeMessage || msg.type;
+          const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(msgTypeDetect);
+
+          // SKIP media URL fetching for messages that already have it or if we've hit limit
+          if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_FETCHES && msg.idMessage && shouldContinue()) {
+            try {
+              const chatIdForDownload = msg.chatId || chat.id;
+              const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chatId: chatIdForDownload, idMessage: msg.idMessage }),
+              });
+              
+              if (downloadResponse.ok) {
+                const downloadData = await downloadResponse.json();
+                if (downloadData.downloadUrl) {
+                  msg.downloadUrl = downloadData.downloadUrl;
+                }
+              }
+              mediaFetchCount++;
+            } catch (e) {
+              // Ignore media fetch errors
+            }
+          }
+
+          let msgType = "text";
           if (msgTypeDetect === "imageMessage") msgType = "image";
           else if (msgTypeDetect === "audioMessage" || msgTypeDetect === "pttMessage") msgType = "audio";
           else if (msgTypeDetect === "videoMessage") msgType = "video";
           else if (msgTypeDetect === "documentMessage") msgType = "file";
           else if (msgTypeDetect === "stickerMessage") msgType = "sticker";
 
-          // Detect outgoing messages: fromMe=true or type="outgoing"
+          const textContent = sanitizeText(msg.textMessage || msg.caption || "");
           const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
           const senderLabel = isOutgoing ? "אני" : sanitizeText(msg.senderName || msg.senderId);
 
-          await supabase.from("messages").insert({
+          messagesToInsert.push({
             child_id,
             chat_id: dbChat.id,
             sender_label: senderLabel,
             is_child_sender: isOutgoing,
             msg_type: msgType,
-            message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
+            message_timestamp: messageTimestamp,
             text_content: textContent,
             text_excerpt: textContent.substring(0, 100),
             media_url: msg.downloadUrl || null,
             media_thumbnail_url: msg.jpegThumbnail || null,
           });
+        }
 
-          totalMessagesImported++;
+        // Batch insert all new messages at once
+        if (messagesToInsert.length > 0) {
+          const { error: insertError } = await supabase
+            .from("messages")
+            .insert(messagesToInsert);
+          
+          if (insertError) {
+            console.error("Batch insert error:", insertError.message);
+          } else {
+            totalMessagesImported += messagesToInsert.length;
+          }
         }
 
         totalChatsProcessed++;
