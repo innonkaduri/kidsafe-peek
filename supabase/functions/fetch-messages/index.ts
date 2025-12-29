@@ -11,24 +11,21 @@ interface FetchMessagesRequest {
   chat_name?: string;
   child_id?: string;
   chat_id?: string;
+  media_type?: 'image' | 'audio' | 'video' | 'all';
+  from_date?: string;
+  to_date?: string;
+  child_only?: boolean;
   limit?: number;
   offset?: number;
 }
 
-interface MessageResponse {
-  id: string;
-  text_content: string | null;
-  sender_label: string;
-  message_timestamp: string;
-  msg_type: string;
-  is_child_sender: boolean | null;
-  media_url: string | null;
-  chat_name: string;
-  child_name: string;
+interface MinimalMessage {
+  chat: string;
+  text: string | null;
+  media: string | null;
 }
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -38,7 +35,6 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Support both GET (query params) and POST (body)
     let params: FetchMessagesRequest;
     
     if (req.method === 'GET') {
@@ -48,6 +44,10 @@ serve(async (req) => {
         chat_name: url.searchParams.get('chat_name') || undefined,
         child_id: url.searchParams.get('child_id') || undefined,
         chat_id: url.searchParams.get('chat_id') || undefined,
+        media_type: (url.searchParams.get('media_type') as FetchMessagesRequest['media_type']) || undefined,
+        from_date: url.searchParams.get('from_date') || undefined,
+        to_date: url.searchParams.get('to_date') || undefined,
+        child_only: url.searchParams.get('child_only') === 'true',
         limit: url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : 100,
         offset: url.searchParams.get('offset') ? parseInt(url.searchParams.get('offset')!) : 0,
       };
@@ -64,17 +64,14 @@ serve(async (req) => {
 
     console.log('Fetch messages request:', params);
 
-    // Build the query
     let query = supabase
       .from('messages')
       .select(`
-        id,
         text_content,
-        sender_label,
-        message_timestamp,
+        media_url,
         msg_type,
         is_child_sender,
-        media_url,
+        message_timestamp,
         chat:chats!inner(
           id,
           chat_name,
@@ -87,24 +84,42 @@ serve(async (req) => {
       .order('message_timestamp', { ascending: false })
       .range(params.offset!, params.offset! + params.limit! - 1);
 
-    // Filter by child_id if provided
+    // Filter by child_id
     if (params.child_id) {
       query = query.eq('child_id', params.child_id);
     }
 
-    // Filter by chat_id if provided
+    // Filter by chat_id
     if (params.chat_id) {
       query = query.eq('chat_id', params.chat_id);
     }
 
-    // Filter by child_name (partial match, case-insensitive)
+    // Filter by child_name (partial match)
     if (params.child_name) {
       query = query.ilike('chat.child.display_name', `%${params.child_name}%`);
     }
 
-    // Filter by chat_name (partial match, case-insensitive)
+    // Filter by chat_name (partial match)
     if (params.chat_name) {
       query = query.ilike('chat.chat_name', `%${params.chat_name}%`);
+    }
+
+    // Filter by media type
+    if (params.media_type && params.media_type !== 'all') {
+      query = query.eq('msg_type', params.media_type);
+    }
+
+    // Filter by date range
+    if (params.from_date) {
+      query = query.gte('message_timestamp', params.from_date);
+    }
+    if (params.to_date) {
+      query = query.lte('message_timestamp', params.to_date + 'T23:59:59');
+    }
+
+    // Filter child messages only
+    if (params.child_only) {
+      query = query.eq('is_child_sender', true);
     }
 
     const { data, error } = await query;
@@ -117,19 +132,11 @@ serve(async (req) => {
       );
     }
 
-    // Transform the response to flatten the structure
-    const messages: MessageResponse[] = (data || []).map((msg: any) => ({
-      id: msg.id,
-      text_content: msg.text_content,
-      sender_label: msg.sender_label,
-      message_timestamp: msg.message_timestamp,
-      msg_type: msg.msg_type,
-      is_child_sender: msg.is_child_sender,
-      media_url: msg.media_url,
-      chat_id: msg.chat?.id,
-      chat_name: msg.chat?.chat_name,
-      child_id: msg.chat?.child?.id,
-      child_name: msg.chat?.child?.display_name,
+    // Minimal response structure
+    const messages: MinimalMessage[] = (data || []).map((msg: any) => ({
+      chat: msg.chat?.chat_name || '',
+      text: msg.text_content,
+      media: msg.media_url
     }));
 
     console.log(`Found ${messages.length} messages`);
