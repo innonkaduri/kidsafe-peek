@@ -86,7 +86,7 @@ export default function TeacherTicket() {
   const { ticketId } = useParams<{ ticketId: string }>();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
-  const { activeRole } = useRole();
+  const { activeRole, hasRole, loading: roleLoading } = useRole();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const [alert, setAlert] = useState<TeacherAlert | null>(null);
@@ -106,13 +106,15 @@ export default function TeacherTicket() {
 
   useEffect(() => {
     if (!authLoading && !user) { navigate('/auth'); return; }
-    if (user && activeRole !== 'teacher') { navigate('/'); return; }
-    if (user && ticketId) {
+    if (roleLoading) return;
+    if (user && !hasRole('teacher')) { navigate('/'); return; }
+    if (user && activeRole && activeRole !== 'teacher') { navigate('/'); return; }
+    if (user && ticketId && hasRole('teacher')) {
       fetchAlert();
       fetchMessages();
       setupRealtimeSubscription();
     }
-  }, [user, authLoading, activeRole, ticketId, navigate]);
+  }, [user, authLoading, activeRole, roleLoading, hasRole, ticketId, navigate]);
 
   useEffect(() => {
     scrollToBottom();
@@ -244,7 +246,7 @@ export default function TeacherTicket() {
     } finally { setSubmitting(false); }
   };
 
-  if (loading || authLoading) return <Layout><div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div></Layout>;
+  if (loading || authLoading || roleLoading) return <Layout><div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div></Layout>;
   if (!alert) return <Layout><div className="p-6 text-center"><p className="text-muted-foreground">הטיקט לא נמצא</p></div></Layout>;
 
   const timeline = Array.isArray(alert.timeline) ? (alert.timeline as TimelineEvent[]) : [];

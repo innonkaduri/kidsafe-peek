@@ -1,6 +1,7 @@
-import { Shield, LogOut, User, Bell, Settings } from 'lucide-react';
+import { Shield, LogOut, User, Bell, Settings, Users, GraduationCap, RefreshCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
+import { useRole } from '@/hooks/useRole';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   DropdownMenu,
@@ -8,11 +9,31 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
+import { Badge } from '@/components/ui/badge';
 
 export function Header() {
   const { user, signOut } = useAuth();
+  const { roles, activeRole, setActiveRole, hasRole } = useRole();
   const navigate = useNavigate();
+  
+  const getRoleIcon = (role: string) => {
+    switch (role) {
+      case 'teacher': return <GraduationCap className="w-4 h-4" />;
+      case 'parent': return <Users className="w-4 h-4" />;
+      default: return <User className="w-4 h-4" />;
+    }
+  };
+  
+  const getRoleLabel = (role: string) => {
+    switch (role) {
+      case 'teacher': return 'מורה';
+      case 'parent': return 'הורה';
+      case 'admin': return 'מנהל';
+      default: return role;
+    }
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -42,14 +63,51 @@ export function Header() {
             <DropdownMenuTrigger asChild>
               <Button variant="glass" className="gap-2">
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-cyan-500/30 flex items-center justify-center">
-                  <User className="w-4 h-4" />
+                  {activeRole ? getRoleIcon(activeRole) : <User className="w-4 h-4" />}
                 </div>
-                <span className="hidden sm:inline font-assistant">
-                  {user?.email?.split('@')[0] || 'משתמש'}
-                </span>
+                <div className="hidden sm:flex flex-col items-start">
+                  <span className="font-assistant text-sm">
+                    {user?.email?.split('@')[0] || 'משתמש'}
+                  </span>
+                  {activeRole && (
+                    <span className="text-xs text-muted-foreground">
+                      {getRoleLabel(activeRole)}
+                    </span>
+                  )}
+                </div>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56 glass-card border-border">
+              {/* Role switcher section */}
+              {roles.length > 1 && (
+                <>
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">
+                    החלף תפקיד
+                  </DropdownMenuLabel>
+                  {roles.map((role) => (
+                    <DropdownMenuItem 
+                      key={role}
+                      onClick={() => {
+                        setActiveRole(role);
+                        if (role === 'teacher') {
+                          navigate('/teacher-portal');
+                        } else {
+                          navigate('/');
+                        }
+                      }}
+                      className={`flex items-center gap-2 cursor-pointer ${activeRole === role ? 'bg-primary/10' : ''}`}
+                    >
+                      {getRoleIcon(role)}
+                      {getRoleLabel(role)}
+                      {activeRole === role && (
+                        <Badge variant="secondary" className="mr-auto text-xs">פעיל</Badge>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              
               <DropdownMenuItem asChild>
                 <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
                   <Settings className="w-4 h-4" />

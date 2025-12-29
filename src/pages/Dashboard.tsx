@@ -5,11 +5,14 @@ import { ChildCard } from '@/components/dashboard/ChildCard';
 import { AddChildDialog } from '@/components/dashboard/AddChildDialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
+import { useRole } from '@/hooks/useRole';
+import { RoleSelector } from '@/components/auth/RoleSelector';
 import { supabase } from '@/integrations/supabase/client';
 import { Child, Scan as ScanType } from '@/types/database';
 import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard() {
+  const { needsRoleSelection, loading: roleLoading } = useRole();
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [children, setChildren] = useState<Child[]>([]);
@@ -61,7 +64,12 @@ export default function Dashboard() {
     fetchData();
   }, [user, authLoading, navigate, fetchData]);
 
-  if (authLoading || loading) {
+  // Show role selector if user has multiple roles and hasn't selected one
+  if (!authLoading && !roleLoading && needsRoleSelection) {
+    return <RoleSelector />;
+  }
+
+  if (authLoading || loading || roleLoading) {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[60vh]">
