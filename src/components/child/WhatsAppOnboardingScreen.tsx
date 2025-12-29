@@ -136,19 +136,19 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
         // Instance exists - set to waiting_scan and start polling
         setStatus('waiting_scan');
         
-        // Try to fetch QR immediately
-        await fetchQR();
+        // Try to fetch QR after a small delay to avoid rate limiting
+        setTimeout(fetchQR, 1000);
         
-        // Poll for status every 5 seconds
+        // Poll for status every 8 seconds (less aggressive)
         pollIntervalRef.current = setInterval(async () => {
           const connected = await checkInstanceStatus();
           if (connected) {
             clearIntervals();
           }
-        }, 5000);
+        }, 8000);
         
-        // Keep trying to get QR every 5 seconds (instead of 30) until we get it
-        qrRefreshIntervalRef.current = setInterval(fetchQR, 5000);
+        // Keep trying to get QR every 10 seconds until we get it
+        qrRefreshIntervalRef.current = setInterval(fetchQR, 10000);
       } else {
         setStatus('no_instance');
       }
