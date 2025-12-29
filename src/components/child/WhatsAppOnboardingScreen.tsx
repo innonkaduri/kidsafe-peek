@@ -93,10 +93,16 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
         return;
       }
 
-      // Instance is still initializing - keep waiting
-      if (data.notReady || data.type === 'error') {
-        console.log('Instance initializing, waiting...');
+      // Instance is still initializing or server busy - keep waiting
+      if (data.notReady || data.retryable || data.rateLimited) {
+        console.log('Instance initializing or server busy, waiting...');
         // Don't change status, keep polling
+        return;
+      }
+
+      // Handle other errors gracefully - don't crash, just keep trying
+      if (data.type === 'error' && !data.message?.includes('already')) {
+        console.log('QR fetch error, will retry:', data.message);
         return;
       }
 

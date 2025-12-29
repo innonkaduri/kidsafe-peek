@@ -196,8 +196,30 @@ serve(async (req) => {
         );
       }
 
+      // 5xx errors (including 504 Gateway Timeout) - treat as temporary, keep waiting
+      if (qrResponse.status >= 500) {
+        console.log("green-api-qr: Server error", qrResponse.status, "- treating as temporary");
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            message: "Server is busy, please wait...",
+            notReady: true,
+            retryable: true,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       if (!qrResponse.ok) {
-        throw new Error(`QR fetch failed: ${qrResponse.status}`);
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            message: "Temporary error, retrying...",
+            notReady: true,
+            retryable: true,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       const qrData = await qrResponse.json();
