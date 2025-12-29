@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.analyze-video]
 verify_jwt = false
+
+[functions.fetch-messages]
+verify_jwt = false
