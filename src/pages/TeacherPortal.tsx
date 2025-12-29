@@ -74,7 +74,7 @@ const SORT_OPTIONS = [
 export default function TeacherPortal() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
-  const { activeRole } = useRole();
+  const { activeRole, hasRole, loading: roleLoading } = useRole();
   const [alerts, setAlerts] = useState<TeacherAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -89,15 +89,26 @@ export default function TeacherPortal() {
       return;
     }
 
-    if (user && activeRole !== 'teacher') {
+    // Wait for role loading
+    if (roleLoading) return;
+
+    // If user doesn't have teacher role at all, redirect home
+    if (user && !hasRole('teacher')) {
       navigate('/');
       return;
     }
 
-    if (user) {
+    // If user has teacher role but selected parent role, redirect home
+    if (user && activeRole && activeRole !== 'teacher') {
+      navigate('/');
+      return;
+    }
+
+    // Fetch alerts if user has teacher role (RLS will filter by teacher_email)
+    if (user && hasRole('teacher')) {
       fetchAlerts();
     }
-  }, [user, authLoading, activeRole, navigate]);
+  }, [user, authLoading, activeRole, roleLoading, hasRole, navigate]);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -268,7 +279,7 @@ export default function TeacherPortal() {
     return cat?.label || category || 'לא מוגדר';
   };
 
-  if (loading || authLoading) {
+  if (loading || authLoading || roleLoading) {
     return (
       <Layout>
         <div className="flex items-center justify-center min-h-[60vh]">
@@ -284,7 +295,12 @@ export default function TeacherPortal() {
         {/* Header */}
         <div>
           <h1 className="text-3xl font-heebo font-bold text-foreground">דשבורד מורים</h1>
-          <p className="text-muted-foreground mt-1">התראות שנשלחו אליך מהורים</p>
+          <p className="text-muted-foreground mt-1">
+            התראות שנשלחו אליך מהורים
+            {user?.email && (
+              <span className="text-xs mr-2 text-primary">({user.email})</span>
+            )}
+          </p>
         </div>
 
         {/* Stats Cards */}
