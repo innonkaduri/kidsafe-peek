@@ -126,17 +126,24 @@ async function getGreenApiCredentials(
 async function fetchWithRetry(
   url: string,
   options: RequestInit,
-  maxRetries = 3
+  maxRetries = 5
 ): Promise<Response> {
   let lastError: Error | null = null;
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
+      // Add delay before each attempt (except first)
+      if (attempt > 0) {
+        const waitTime = Math.min(Math.pow(2, attempt) * 2000, 15000); // 2s, 4s, 8s, 15s max
+        console.log(`Waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      
       const response = await fetch(url, options);
       
-      // If rate limited, wait and retry
+      // If rate limited, wait longer and retry
       if (response.status === 429) {
-        const waitTime = Math.pow(2, attempt) * 1000; // Exponential backoff: 1s, 2s, 4s
+        const waitTime = Math.min(Math.pow(2, attempt + 1) * 3000, 20000); // 6s, 12s, 20s max
         console.log(`Rate limited (429), waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
@@ -146,7 +153,6 @@ async function fetchWithRetry(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       console.error(`Fetch attempt ${attempt + 1} failed:`, lastError.message);
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
   
@@ -222,8 +228,8 @@ serve(async (req) => {
     let totalMessagesImported = 0;
     let totalChatsProcessed = 0;
 
-    // Reduced to 5 chats to prevent rate limiting
-    for (const chat of chats.slice(0, 5)) {
+    // Reduced to 3 chats to prevent rate limiting
+    for (const chat of chats.slice(0, 3)) {
       try {
         const chatName = sanitizeText(chat.name || chat.id);
 
@@ -257,8 +263,8 @@ serve(async (req) => {
           dbChat = newChat;
         }
 
-        // Add delay between chats to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Add longer delay between chats to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
         // Fetch messages for this chat with retry
         const messagesResponse = await fetchWithRetry(`${baseUrl}/getChatHistory/${apiToken}`, {
