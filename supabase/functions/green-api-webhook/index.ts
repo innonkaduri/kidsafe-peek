@@ -85,61 +85,102 @@ serve(async (req) => {
     const url = new URL(req.url);
     const childIdFromQuery = url.searchParams.get("child_id");
 
-    const webhookData: GreenAPIMessage = await req.json();
+    // Parse webhook data
+    let webhookData: GreenAPIMessage;
+    try {
+      webhookData = await req.json();
+    } catch (parseError) {
+      console.error("Failed to parse webhook JSON:", parseError);
+      return new Response(JSON.stringify({ error: "Invalid JSON payload" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Validate required webhook structure
+    if (!webhookData.instanceData || !webhookData.instanceData.idInstance) {
+      console.error("Invalid webhook structure - missing instanceData");
+      return new Response(JSON.stringify({ error: "Invalid webhook structure" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const instanceId = webhookData.instanceData.idInstance.toString();
 
     console.log("Webhook received:", webhookData.typeWebhook, "instance:", instanceId);
+
+    // SECURITY: Verify that the instanceId belongs to a registered credential
+    // This prevents attackers from sending fake webhooks with arbitrary instance IDs
+    const { data: validCredential, error: credError } = await supabase
+      .from("connector_credentials")
+      .select("id, child_id, status")
+      .eq("instance_id", instanceId)
+      .maybeSingle();
+
+    if (credError) {
+      console.error("Error verifying instance credential:", credError);
+      return new Response(JSON.stringify({ error: "Database error" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!validCredential) {
+      console.warn("SECURITY: Webhook from unregistered instance:", instanceId);
+      // Return 200 to avoid revealing instance validation to attackers
+      // But don't process the webhook
+      return new Response(JSON.stringify({ status: "ignored" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("Verified webhook from instance:", instanceId, "for child:", validCredential.child_id);
 
     // Handle state change webhooks (connection status)
     if (webhookData.typeWebhook === "stateInstanceChanged") {
       const newState = webhookData.stateInstance;
       console.log("State changed to:", newState, "for instance:", instanceId);
 
-      // Find the credential for this instance
-      const { data: cred } = await supabase
-        .from("connector_credentials")
-        .select("id, child_id, status")
-        .eq("instance_id", instanceId)
-        .maybeSingle();
-
-      if (cred) {
-        if (newState === "authorized") {
-          // Update status to authorized
-          await supabase
-            .from("connector_credentials")
-            .update({ status: "authorized", last_checked_at: new Date().toISOString() })
-            .eq("id", cred.id);
-          console.log("Updated status to authorized for child:", cred.child_id);
-        } else if (newState === "notAuthorized" || newState === "sleeping") {
-          // Only delete if the instance was previously authorized (user disconnected)
-          // Don't delete if status is still 'pending' - user hasn't scanned QR yet
-          if (cred.status === "authorized") {
-            console.log("User disconnected after being authorized, deleting for child:", cred.child_id);
-            
-            // Delete from partner API
-            const partnerToken = Deno.env.get("GREEN_API_PARTNER_TOKEN");
-            const partnerUrl = Deno.env.get("GREEN_API_PARTNER_URL") || "https://api.green-api.com";
-            
-            if (partnerToken) {
-              try {
-                await fetch(`${partnerUrl}/partner/deleteInstanceAccount/${partnerToken}`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ idInstance: parseInt(instanceId) }),
-                });
-                console.log("Instance deleted from Green API");
-              } catch (e) {
-                console.error("Failed to delete instance from Green API:", e);
-              }
+      // Use the already verified credential
+      const cred = validCredential;
+      
+      if (newState === "authorized") {
+        // Update status to authorized
+        await supabase
+          .from("connector_credentials")
+          .update({ status: "authorized", last_checked_at: new Date().toISOString() })
+          .eq("id", cred.id);
+        console.log("Updated status to authorized for child:", cred.child_id);
+      } else if (newState === "notAuthorized" || newState === "sleeping") {
+        // Only delete if the instance was previously authorized (user disconnected)
+        // Don't delete if status is still 'pending' - user hasn't scanned QR yet
+        if (cred.status === "authorized") {
+          console.log("User disconnected after being authorized, deleting for child:", cred.child_id);
+          
+          // Delete from partner API
+          const partnerToken = Deno.env.get("GREEN_API_PARTNER_TOKEN");
+          const partnerUrl = Deno.env.get("GREEN_API_PARTNER_URL") || "https://api.green-api.com";
+          
+          if (partnerToken) {
+            try {
+              await fetch(`${partnerUrl}/partner/deleteInstanceAccount/${partnerToken}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ idInstance: parseInt(instanceId) }),
+              });
+              console.log("Instance deleted from Green API");
+            } catch (e) {
+              console.error("Failed to delete instance from Green API:", e);
             }
-
-            // Delete credential from DB
-            await supabase.from("connector_credentials").delete().eq("id", cred.id);
-            console.log("Credential deleted from DB");
-          } else {
-            // Instance is still pending - waiting for QR scan, don't delete
-            console.log("Instance still pending (status:", cred.status, "), waiting for QR scan");
           }
+
+          // Delete credential from DB
+          await supabase.from("connector_credentials").delete().eq("id", cred.id);
+          console.log("Credential deleted from DB");
+        } else {
+          // Instance is still pending - waiting for QR scan, don't delete
+          console.log("Instance still pending (status:", cred.status, "), waiting for QR scan");
         }
       }
 
@@ -147,7 +188,6 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
     // Process both incoming and outgoing messages
     const isIncoming = webhookData.typeWebhook === "incomingMessageReceived";
     const isOutgoing = webhookData.typeWebhook === "outgoingMessageReceived" || 
@@ -170,21 +210,8 @@ serve(async (req) => {
 
     console.log("Processing message - type:", webhookData.typeWebhook, "isOutgoing:", isOutgoing);
 
-    // Find the child for this instance
-    let childId: string | null = childIdFromQuery;
-
-    if (!childId) {
-      // Look up by instance_id in connector_credentials
-      const { data: cred } = await supabase
-        .from("connector_credentials")
-        .select("child_id")
-        .eq("instance_id", instanceId)
-        .maybeSingle();
-
-      if (cred) {
-        childId = cred.child_id;
-      }
-    }
+    // Use the already verified child_id from the credential
+    const childId: string = childIdFromQuery || validCredential.child_id;
 
     if (!childId) {
       console.error("No child found for instance:", instanceId);
