@@ -93,6 +93,13 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
         return;
       }
 
+      // Instance is still initializing - keep waiting
+      if (data.notReady || data.type === 'error') {
+        console.log('Instance initializing, waiting...');
+        // Don't change status, keep polling
+        return;
+      }
+
       if (data.type === 'qrCode' && data.message) {
         setQrCode(data.message);
         setStatus('waiting_scan');
@@ -120,8 +127,13 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       });
 
       if (data?.hasInstance) {
+        // Instance exists - set to waiting_scan and start polling
+        setStatus('waiting_scan');
+        
+        // Try to fetch QR immediately
         await fetchQR();
         
+        // Poll for status every 5 seconds
         pollIntervalRef.current = setInterval(async () => {
           const connected = await checkInstanceStatus();
           if (connected) {
@@ -129,7 +141,8 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
           }
         }, 5000);
         
-        qrRefreshIntervalRef.current = setInterval(fetchQR, 30000);
+        // Keep trying to get QR every 5 seconds (instead of 30) until we get it
+        qrRefreshIntervalRef.current = setInterval(fetchQR, 5000);
       } else {
         setStatus('no_instance');
       }
@@ -273,32 +286,46 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
             </div>
           )}
 
-          {/* QR Code Display */}
-          {status === 'waiting_scan' && qrCode && (
+          {/* QR Code Display or Waiting for QR */}
+          {status === 'waiting_scan' && (
             <div className="flex flex-col items-center gap-4 py-6">
               <Badge variant="outline" className="gap-1 border-primary/50 text-primary mb-2">
                 <QrCode className="w-3 h-3" />
-                ממתין לסריקה
+                {qrCode ? 'ממתין לסריקה' : 'מאתחל מופע...'}
               </Badge>
-              <div className="bg-white p-4 rounded-2xl shadow-lg">
-                <img 
-                  src={`data:image/png;base64,${qrCode}`} 
-                  alt="WhatsApp QR Code"
-                  className="w-64 h-64"
-                />
-              </div>
-              <div className="text-center space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
-                </p>
-                <p className="text-xs text-muted-foreground/60">
-                  הקוד מתרענן אוטומטית כל 30 שניות
-                </p>
-              </div>
-              <Button variant="ghost" size="sm" onClick={fetchQR} className="gap-2">
-                <RefreshCw className="w-4 h-4" />
-                רענן QR
-              </Button>
+              
+              {qrCode ? (
+                <>
+                  <div className="bg-white p-4 rounded-2xl shadow-lg">
+                    <img 
+                      src={`data:image/png;base64,${qrCode}`} 
+                      alt="WhatsApp QR Code"
+                      className="w-64 h-64"
+                    />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
+                    </p>
+                    <p className="text-xs text-muted-foreground/60">
+                      הקוד מתרענן אוטומטית
+                    </p>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={fetchQR} className="gap-2">
+                    <RefreshCw className="w-4 h-4" />
+                    רענן QR
+                  </Button>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-4">
+                  <div className="w-64 h-64 bg-muted/30 rounded-2xl flex items-center justify-center">
+                    <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    המופע מאותחל, ה-QR יופיע בקרוב...
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
