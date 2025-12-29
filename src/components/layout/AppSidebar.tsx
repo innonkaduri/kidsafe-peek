@@ -1,7 +1,7 @@
-import { Home, Users, Bell, MessageCircle, LayoutDashboard, Settings, Shield, Star, Heart } from 'lucide-react';
+import { Home, Users, Bell, LayoutDashboard, Settings, Shield, Star, Heart } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
+import { useRole } from '@/hooks/useRole';
 
 import {
   Sidebar,
@@ -15,12 +15,13 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 
-const menuItems = [
+type MenuItem = { title: string; url: string; icon: any };
+
+const baseMenuItems: MenuItem[] = [
   { title: 'ראשי', url: '/', icon: Home },
   { title: 'הילדים שלי', url: '/children', icon: Users },
   { title: 'התראות', url: '/alerts', icon: Bell },
   { title: 'פורום הורים', url: '/forum', icon: Heart },
-  { title: 'דשבורד מורים', url: '/teachers', icon: LayoutDashboard },
   { title: 'הגדרות', url: '/settings', icon: Settings },
 ];
 
@@ -29,7 +30,12 @@ export function AppSidebar() {
   const collapsed = state === 'collapsed';
   const location = useLocation();
   const currentPath = location.pathname;
-  const { user } = useAuth();
+  const { hasRole } = useRole();
+
+  const menuItems: MenuItem[] = [
+    ...baseMenuItems,
+    ...(hasRole('teacher') ? [{ title: 'דשבורד מורים', url: '/teacher-portal', icon: LayoutDashboard }] : []),
+  ];
 
   const isActive = (path: string) => {
     if (path === '/') return currentPath === '/';
