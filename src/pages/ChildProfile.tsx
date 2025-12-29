@@ -3,10 +3,13 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowRight, User, Shield } from 'lucide-react';
 import { Layout } from '@/components/layout/Layout';
 import { ChildTabs } from '@/components/child/ChildTabs';
+import { WhatsAppOnboardingScreen } from '@/components/child/WhatsAppOnboardingScreen';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Child } from '@/types/database';
+
+type WhatsAppStatus = 'loading' | 'not_connected' | 'connected';
 
 export default function ChildProfile() {
   const { childId } = useParams<{ childId: string }>();
@@ -14,6 +17,32 @@ export default function ChildProfile() {
   const navigate = useNavigate();
   const [child, setChild] = useState<Child | null>(null);
   const [loading, setLoading] = useState(true);
+  const [whatsappStatus, setWhatsappStatus] = useState<WhatsAppStatus>('loading');
+
+  const checkWhatsAppStatus = useCallback(async () => {
+    if (!childId) return;
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('green-api-partner', {
+        body: { action: 'getStatus', child_id: childId },
+      });
+
+      if (error) {
+        console.error('WhatsApp status check error:', error);
+        setWhatsappStatus('not_connected');
+        return;
+      }
+
+      if (data?.hasInstance && data?.status === 'authorized') {
+        setWhatsappStatus('connected');
+      } else {
+        setWhatsappStatus('not_connected');
+      }
+    } catch (error) {
+      console.error('WhatsApp status check error:', error);
+      setWhatsappStatus('not_connected');
+    }
+  }, [childId]);
 
   const fetchChild = useCallback(async () => {
     if (!user || !childId) return;
@@ -45,6 +74,12 @@ export default function ChildProfile() {
     fetchChild();
   }, [user, authLoading, navigate, fetchChild]);
 
+  useEffect(() => {
+    if (child) {
+      checkWhatsAppStatus();
+    }
+  }, [child, checkWhatsAppStatus]);
+
   if (authLoading || loading || !child) {
     return (
       <Layout>
@@ -53,6 +88,40 @@ export default function ChildProfile() {
             <Shield className="w-16 h-16 mx-auto mb-4 text-primary animate-pulse" />
             <p className="text-muted-foreground">טוען פרופיל...</p>
           </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Show only WhatsApp onboarding if not connected
+  if (whatsappStatus === 'loading') {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center">
+            <Shield className="w-16 h-16 mx-auto mb-4 text-primary animate-pulse" />
+            <p className="text-muted-foreground">בודק סטטוס חיבור...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (whatsappStatus === 'not_connected') {
+    return (
+      <Layout>
+        <div className="space-y-6 animate-slide-up">
+          <div className="flex items-center gap-4 mb-6">
+            <Button asChild variant="ghost" size="icon" className="text-foreground hover:bg-accent">
+              <Link to="/">
+                <ArrowRight className="w-5 h-5" />
+              </Link>
+            </Button>
+          </div>
+          <WhatsAppOnboardingScreen 
+            child={child} 
+            onConnected={() => setWhatsappStatus('connected')} 
+          />
         </div>
       </Layout>
     );
