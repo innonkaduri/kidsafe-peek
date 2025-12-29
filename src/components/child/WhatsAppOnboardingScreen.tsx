@@ -31,6 +31,8 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const creationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isInitializedRef = useRef(false);
+  const isFetchingRef = useRef(false);
 
   const clearIntervals = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -48,6 +50,9 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
   }, []);
 
   const checkInstanceStatus = useCallback(async () => {
+    if (isFetchingRef.current) return false;
+    isFetchingRef.current = true;
+    
     try {
       const { data, error } = await supabase.functions.invoke('green-api-partner', {
         body: { action: 'getStatus', child_id: child.id },
@@ -74,10 +79,15 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
     } catch (error) {
       console.error('Status check error:', error);
       return false;
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [child.id, clearIntervals, onConnected]);
 
   const fetchQR = useCallback(async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    
     try {
       setErrorMessage(null);
       
@@ -96,11 +106,10 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       // Instance is still initializing or server busy - keep waiting
       if (data.notReady || data.retryable || data.rateLimited) {
         console.log('Instance initializing or server busy, waiting...');
-        // Don't change status, keep polling
         return;
       }
 
-      // Handle other errors gracefully - don't crash, just keep trying
+      // Handle other errors gracefully
       if (data.type === 'error' && !data.message?.includes('already')) {
         console.log('QR fetch error, will retry:', data.message);
         return;
@@ -118,47 +127,51 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       }
     } catch (error: any) {
       console.error('QR fetch error:', error);
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [child.id, clearIntervals, onConnected]);
 
-  const initializeConnection = useCallback(async () => {
-    setStatus('loading');
-    clearIntervals();
-    
-    const isConnected = await checkInstanceStatus();
-    
-    if (!isConnected) {
-      const { data } = await supabase.functions.invoke('green-api-partner', {
-        body: { action: 'getStatus', child_id: child.id },
-      });
-
-      if (data?.hasInstance) {
-        // Instance exists - set to waiting_scan and start polling
-        setStatus('waiting_scan');
-        
-        // Try to fetch QR after a small delay to avoid rate limiting
-        setTimeout(fetchQR, 1000);
-        
-        // Poll for status every 8 seconds (less aggressive)
-        pollIntervalRef.current = setInterval(async () => {
-          const connected = await checkInstanceStatus();
-          if (connected) {
-            clearIntervals();
-          }
-        }, 8000);
-        
-        // Keep trying to get QR every 10 seconds until we get it
-        qrRefreshIntervalRef.current = setInterval(fetchQR, 10000);
-      } else {
-        setStatus('no_instance');
-      }
-    }
-  }, [checkInstanceStatus, fetchQR, child.id, clearIntervals]);
-
+  // Initialize once on mount
   useEffect(() => {
-    initializeConnection();
+    if (isInitializedRef.current) return;
+    isInitializedRef.current = true;
+
+    const initialize = async () => {
+      setStatus('loading');
+      clearIntervals();
+      
+      const isConnected = await checkInstanceStatus();
+      
+      if (!isConnected) {
+        const { data } = await supabase.functions.invoke('green-api-partner', {
+          body: { action: 'getStatus', child_id: child.id },
+        });
+
+        if (data?.hasInstance) {
+          setStatus('waiting_scan');
+          
+          // Fetch QR after delay
+          setTimeout(fetchQR, 2000);
+          
+          // Poll for status every 15 seconds
+          pollIntervalRef.current = setInterval(async () => {
+            const connected = await checkInstanceStatus();
+            if (connected) clearIntervals();
+          }, 15000);
+          
+          // Refresh QR every 20 seconds
+          qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
+        } else {
+          setStatus('no_instance');
+        }
+      }
+    };
+
+    initialize();
+    
     return () => clearIntervals();
-  }, [initializeConnection, clearIntervals]);
+  }, [child.id, checkInstanceStatus, fetchQR, clearIntervals]);
 
   const createInstance = async (e?: React.MouseEvent) => {
     e?.preventDefault();
@@ -207,8 +220,22 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       
       toast.success('מופע נוצר בהצלחה! מחכה לסריקת QR...');
       
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      await initializeConnection();
+      // Start waiting for QR
+      setStatus('waiting_scan');
+      
+      // Wait and then start polling
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Start fetching QR
+      fetchQR();
+      
+      // Set up polling intervals
+      pollIntervalRef.current = setInterval(async () => {
+        const connected = await checkInstanceStatus();
+        if (connected) clearIntervals();
+      }, 15000);
+      
+      qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
       
     } catch (error: any) {
       clearInterval(progressInterval);
