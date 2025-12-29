@@ -56,10 +56,12 @@ export default function TeachersDashboard() {
     setLoading(true);
 
     // Fetch alerts where this user is the teacher (by email)
-    // RLS policy already filters by teacher_email = auth.email
+    // Important: filter by teacher_email to show only alerts sent TO this teacher
+    // not alerts created BY this user as a parent
     const { data: alertsData, error } = await supabase
       .from('teacher_alerts')
       .select('*')
+      .eq('teacher_email', user.email)
       .order('created_at', { ascending: false });
 
     if (error) {
