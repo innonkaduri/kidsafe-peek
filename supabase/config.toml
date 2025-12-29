@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.fetch-messages]
 verify_jwt = false
+
+[functions.send-alert-email]
+verify_jwt = true
