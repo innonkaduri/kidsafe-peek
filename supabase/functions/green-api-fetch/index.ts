@@ -367,29 +367,56 @@ serve(async (req) => {
           });
         }
 
-        // Batch insert all new messages at once with ON CONFLICT DO NOTHING
+        // Filter out messages that already exist by external_message_id
         if (messagesToInsert.length > 0) {
-          const { error: insertError, count } = await supabase
-            .from("messages")
-            .upsert(messagesToInsert, { 
-              onConflict: 'external_message_id',
-              ignoreDuplicates: true 
-            });
+          // Get list of external_message_ids we're about to insert
+          const externalIds = messagesToInsert
+            .map(m => m.external_message_id)
+            .filter(Boolean);
           
-          if (insertError) {
-            // If external_message_id conflict fails, try without it (unique content index will catch duplicates)
-            console.log("Upsert with external_message_id failed, trying regular insert:", insertError.message);
-            const { error: fallbackError } = await supabase
+          // Check which ones already exist
+          let existingIds: Set<string> = new Set();
+          if (externalIds.length > 0) {
+            const { data: existingMessages } = await supabase
               .from("messages")
-              .insert(messagesToInsert);
+              .select("external_message_id")
+              .in("external_message_id", externalIds);
             
-            if (fallbackError && !fallbackError.message.includes('duplicate')) {
-              console.error("Batch insert error:", fallbackError.message);
+            existingIds = new Set(
+              (existingMessages || [])
+                .map(m => m.external_message_id)
+                .filter(Boolean)
+            );
+          }
+          
+          // Filter out duplicates
+          const newMessages = messagesToInsert.filter(m => {
+            if (m.external_message_id && existingIds.has(m.external_message_id)) {
+              return false; // Skip - already exists
+            }
+            return true;
+          });
+          
+          if (newMessages.length > 0) {
+            console.log(`Inserting ${newMessages.length} new messages (filtered from ${messagesToInsert.length})`);
+            
+            const { error: insertError } = await supabase
+              .from("messages")
+              .insert(newMessages);
+            
+            if (insertError) {
+              // If it's a duplicate error, that's fine - another process beat us
+              if (insertError.message?.includes('duplicate') || insertError.code === '23505') {
+                console.log("Some duplicates detected, continuing...");
+                totalMessagesImported += newMessages.length;
+              } else {
+                console.error("Batch insert error:", insertError.message);
+              }
             } else {
-              totalMessagesImported += messagesToInsert.length;
+              totalMessagesImported += newMessages.length;
             }
           } else {
-            totalMessagesImported += messagesToInsert.length;
+            console.log("No new messages to insert (all duplicates)");
           }
         }
 

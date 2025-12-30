@@ -394,11 +394,24 @@ serve(async (req) => {
       external_message_id: externalMessageId,
     };
 
-    // Use upsert with ignoreDuplicates to prevent duplicate messages
-    let { error: msgError } = await supabase.from("messages").upsert([payload], {
-      onConflict: 'external_message_id',
-      ignoreDuplicates: true
-    });
+    // Check if message already exists by external_message_id
+    if (externalMessageId) {
+      const { data: existing } = await supabase
+        .from("messages")
+        .select("id")
+        .eq("external_message_id", externalMessageId)
+        .maybeSingle();
+      
+      if (existing) {
+        console.log("Message already exists, skipping:", externalMessageId);
+        return new Response(JSON.stringify({ status: "duplicate_skipped" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Insert the message
+    let { error: msgError } = await supabase.from("messages").insert([payload]);
 
     // If insert fails with Unicode/JSON error, retry without thumbnail
     if (msgError && msgError.code === "22P02") {
@@ -418,6 +431,14 @@ serve(async (req) => {
         const finalResult = await supabase.from("messages").insert([minimalPayload]);
         msgError = finalResult.error;
       }
+    }
+    
+    // Handle duplicate key error gracefully (race condition - another process inserted it)
+    if (msgError && (msgError.code === "23505" || msgError.message?.includes('duplicate'))) {
+      console.log("Duplicate message detected (race condition), skipping:", externalMessageId);
+      return new Response(JSON.stringify({ status: "duplicate_skipped" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     if (msgError) {
