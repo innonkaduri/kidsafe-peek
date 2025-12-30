@@ -33,6 +33,9 @@ verify_jwt = false
 [functions.send-otp-email]
 verify_jwt = false
 
+[functions.verify-otp]
+verify_jwt = false
+
 [functions.send-teacher-alert-email]
 verify_jwt = false
 
