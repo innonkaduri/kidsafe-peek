@@ -15,17 +15,27 @@ interface ScanTabProps {
   onScanComplete: () => void;
 }
 
+interface MessagePreview {
+  messagesCount: number;
+  textCount: number;
+  imageCount: number;
+  audioCount: number;
+  videoCount: number;
+  oldestMessageAt: string | null;
+  newestMessageAt: string | null;
+  sampleMessages: Array<{
+    sender: string;
+    type: string;
+    preview: string;
+    time: string;
+  }>;
+}
+
 export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
-  const [promptPreview, setPromptPreview] = useState<{
-    userPrompt: string;
-    messagesCount: number;
-    limitedCount: number;
-    newestMessageAt: string | null;
-    oldestMessageAt: string | null;
-  } | null>(null);
+  const [messagePreview, setMessagePreview] = useState<MessagePreview | null>(null);
   const [result, setResult] = useState<{
     threatDetected: boolean;
     riskLevel: string | null;
@@ -50,129 +60,9 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     fetchLastScan();
   }, [child.id]);
 
-  // Build the prompt (same logic as edge function)
-  const buildPrompt = (messages: any[]) => {
-    const limitedMessages = messages.slice(-50);
-
-    // Count media types for summary
-    const imageCount = limitedMessages.filter(m => m.msg_type === 'image' && m.media_url).length;
-    const videoCount = limitedMessages.filter(m => m.msg_type === 'video' && m.media_url).length;
-    const audioCount = limitedMessages.filter(m => m.msg_type === 'audio' && m.media_url).length;
-
-    const formattedMessages = limitedMessages.map((msg) => {
-      let content = msg.text_content || '';
-      
-      // For media messages, show friendly description
-      if (msg.msg_type === 'image' && msg.media_url) {
-        content = msg.text_content 
-          ? `${msg.text_content} [🖼️ + תמונה]` 
-          : `[🖼️ תמונה - תיבדק על ידי AI]`;
-      } else if (msg.msg_type === 'video' && msg.media_url) {
-        content = msg.text_content 
-          ? `${msg.text_content} [🎬 + וידאו]` 
-          : `[🎬 וידאו - תמונה ממוזערת תיבדק על ידי AI]`;
-      } else if (msg.msg_type === 'audio' && msg.media_url) {
-        content = msg.text_content 
-          ? `${msg.text_content} [🎤 + הודעה קולית]` 
-          : `[🎤 הודעה קולית - תתומלל ותיבדק על ידי AI]`;
-      } else if (!content && msg.media_url) {
-        content = `[📎 מדיה: ${msg.msg_type}]`;
-      } else if (!content) {
-        content = '[הודעה ריקה]';
-      }
-      return {
-        id: msg.id,
-        sender: msg.sender_label,
-        isChild: msg.is_child_sender,
-        type: msg.msg_type,
-        time: msg.message_timestamp,
-        content: content.slice(0, 500),
-        media_url: msg.media_url ? '✓ יש URL' : null,
-        chat: msg.chat_name || "שיחה",
-        mediaInfo: msg.media_url ? { type: msg.msg_type, hasUrl: true } : null,
-      };
-    });
-
-    const userPrompt = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
-
-המטרה שלך:
-לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
-
-❗ חשוב מאוד:
-אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
-עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
-
-סוגי סיכון שמותר לזהות:
-- חרם, השפלה מתמשכת או אלימות רגשית קשה
-- איומים פיזיים מפורשים
-- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
-- סמים, אלכוהול או שידול לשימוש
-- פגיעה עצמית או עידוד לפגיעה עצמית
-- סחיטה, איום או מניפולציה מסוכנת
-
-❌ אסור להתריע על:
-- שיח יומיומי, בדיחות, קללות קלות
-- פוליטיקה, חדשות, דעות
-- ויכוחים רגילים
-- שפה בוטה בלי איום ממשי
-- תוכן לא נעים אך לא מסוכן
-
-הודעות לניתוח:
-${JSON.stringify(formattedMessages, null, 2)}
-
----
-
-📤 החזר **JSON בלבד**, בלי טקסט חופשי, בלי הסברים מסביב.
-
-מבנה החזרה מחייב:
-{
-  "threatDetected": boolean,
-  "riskLevel": "low" | "medium" | "high" | "critical" | null,
-  "threatTypes": string[],
-  "triggers": [
-    {
-      "messageId": string,
-      "type": "text" | "image" | "audio",
-      "preview": string,
-      "confidence": number
-    }
-  ],
-  "patterns": [
-    {
-      "chatId": string,
-      "patternType": string,
-      "description": string,
-      "confidence": number
-    }
-  ],
-  "explanation": string
-}
-
-אם אין סיכון ממשי → החזר:
-{
-  "threatDetected": false,
-  "riskLevel": null,
-  "threatTypes": [],
-  "triggers": [],
-  "patterns": [],
-  "explanation": "לא זוהה סיכון ממשי"
-}`;
-
-    const oldestMessageAt = limitedMessages[0]?.message_timestamp ?? null;
-    const newestMessageAt = limitedMessages[limitedMessages.length - 1]?.message_timestamp ?? null;
-
-    return {
-      userPrompt,
-      messagesCount: messages.length,
-      limitedCount: limitedMessages.length,
-      newestMessageAt,
-      oldestMessageAt,
-    };
-  };
-
-  const previewPrompt = async () => {
+  // Fetch messages and build simple preview
+  const fetchMessagesPreview = async () => {
     try {
-      // Fetch messages since last scan (or all if no scan)
       let query = supabase
         .from('messages')
         .select(`
@@ -197,23 +87,49 @@ ${JSON.stringify(formattedMessages, null, 2)}
 
       if (messagesError) throw messagesError;
 
-      // Format messages with chat names
-      const formattedMessages = (messages || []).map((msg: any) => ({
-        id: msg.id,
-        sender_label: msg.sender_label,
-        is_child_sender: msg.is_child_sender,
-        msg_type: msg.msg_type,
-        message_timestamp: msg.message_timestamp,
-        text_content: msg.text_content,
-        media_url: msg.media_url,
-        chat_name: msg.chats?.chat_name,
-      }));
+      const allMessages = messages || [];
+      
+      // Count by type
+      const textCount = allMessages.filter(m => m.msg_type === 'text').length;
+      const imageCount = allMessages.filter(m => m.msg_type === 'image' && m.media_url).length;
+      const audioCount = allMessages.filter(m => m.msg_type === 'audio' && m.media_url).length;
+      const videoCount = allMessages.filter(m => m.msg_type === 'video' && m.media_url).length;
 
-      const prompt = buildPrompt(formattedMessages);
-      setPromptPreview(prompt);
+      // Get sample messages (first 3 and last 3)
+      const limitedMessages = allMessages.slice(-50);
+      const sampleMessages = [
+        ...limitedMessages.slice(0, 3),
+        ...limitedMessages.slice(-3)
+      ].filter((msg, index, self) => 
+        self.findIndex(m => m.id === msg.id) === index
+      ).map((msg: any) => {
+        let preview = msg.text_content || '';
+        if (msg.msg_type === 'image') preview = '🖼️ תמונה';
+        else if (msg.msg_type === 'audio') preview = '🎤 הודעה קולית';
+        else if (msg.msg_type === 'video') preview = '🎬 וידאו';
+        else if (!preview) preview = '[הודעה ריקה]';
+        
+        return {
+          sender: msg.sender_label,
+          type: msg.msg_type,
+          preview: preview.slice(0, 100),
+          time: msg.message_timestamp,
+        };
+      });
+
+      setMessagePreview({
+        messagesCount: allMessages.length,
+        textCount,
+        imageCount,
+        audioCount,
+        videoCount,
+        oldestMessageAt: allMessages[0]?.message_timestamp ?? null,
+        newestMessageAt: allMessages[allMessages.length - 1]?.message_timestamp ?? null,
+        sampleMessages,
+      });
     } catch (error: any) {
-      console.error('Error building preview:', error);
-      toast.error('שגיאה בטעינת הפרומפט: ' + error.message);
+      console.error('Error fetching messages preview:', error);
+      toast.error('שגיאה בטעינת ההודעות: ' + error.message);
     }
   };
 
@@ -221,7 +137,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
     setScanning(true);
     setProgress(0);
     setResult(null);
-    setPromptPreview(null);
+    setMessagePreview(null);
 
     try {
       // Create scan record
@@ -460,6 +376,9 @@ ${JSON.stringify(formattedMessages, null, 2)}
         toast.success('לא זוהו סיכונים');
       }
 
+      // Update lastScanAt in state
+      setLastScanAt(new Date().toISOString());
+
       onScanComplete();
     } catch (error: any) {
       console.error('Scan error:', error);
@@ -483,7 +402,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {!scanning && !result && !promptPreview && (
+          {!scanning && !result && !messagePreview && (
             <>
               <div className="glass-card p-4 rounded-xl space-y-2">
                 <p className="text-sm text-muted-foreground">
@@ -498,9 +417,9 @@ ${JSON.stringify(formattedMessages, null, 2)}
               </div>
 
               <div className="flex gap-3">
-                <Button onClick={previewPrompt} variant="outline" size="lg" className="flex-1">
+                <Button onClick={fetchMessagesPreview} variant="outline" size="lg" className="flex-1">
                   <Eye className="w-5 h-5" />
-                  הצג פרומפט לבדיקה
+                  הצג תקציר הודעות
                 </Button>
                 <Button onClick={startScan} variant="glow" size="lg" className="flex-1">
                   <Zap className="w-5 h-5" />
@@ -510,49 +429,75 @@ ${JSON.stringify(formattedMessages, null, 2)}
             </>
           )}
 
-          {promptPreview && !scanning && !result && (
+          {messagePreview && !scanning && !result && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="font-heebo font-bold text-lg">תצוגה מקדימה של הפרומפט</h3>
-                <Button variant="ghost" size="sm" onClick={() => setPromptPreview(null)}>
+                <h3 className="font-heebo font-bold text-lg">תקציר הודעות לניתוח</h3>
+                <Button variant="ghost" size="sm" onClick={() => setMessagePreview(null)}>
                   <X className="w-4 h-4" />
                 </Button>
               </div>
               
-              <div className="glass-card p-4 rounded-xl space-y-2">
-                <p className="text-sm">
-                  <strong>סה"כ הודעות:</strong> {promptPreview.messagesCount}
-                </p>
-                <p className="text-sm">
-                  <strong>נשלחות לניתוח:</strong> {promptPreview.limitedCount} (מוגבל ל-50 אחרונות)
-                </p>
-                <p className="text-sm">
-                  <strong>טווח זמן בפריוויו:</strong>{' '}
-                  {promptPreview.oldestMessageAt
-                    ? new Date(promptPreview.oldestMessageAt).toLocaleString('he-IL')
-                    : '—'}{' '}
-                  →{' '}
-                  {promptPreview.newestMessageAt
-                    ? new Date(promptPreview.newestMessageAt).toLocaleString('he-IL')
-                    : '—'}
-                </p>
+              <div className="glass-card p-4 rounded-xl space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">סה"כ הודעות</p>
+                    <p className="text-2xl font-bold text-primary">{messagePreview.messagesCount}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">יישלחו לניתוח</p>
+                    <p className="text-2xl font-bold text-primary">{Math.min(messagePreview.messagesCount, 50)}</p>
+                  </div>
+                </div>
+                
+                <div className="border-t pt-3">
+                  <p className="text-sm font-semibold mb-2">פירוט לפי סוג:</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary">📝 טקסט: {messagePreview.textCount}</Badge>
+                    <Badge variant="secondary">🖼️ תמונות: {messagePreview.imageCount}</Badge>
+                    <Badge variant="secondary">🎤 הודעות קוליות: {messagePreview.audioCount}</Badge>
+                    <Badge variant="secondary">🎬 וידאו: {messagePreview.videoCount}</Badge>
+                  </div>
+                </div>
+
+                <div className="border-t pt-3">
+                  <p className="text-sm font-semibold mb-1">טווח זמן:</p>
+                  <p className="text-sm text-muted-foreground">
+                    {messagePreview.oldestMessageAt
+                      ? new Date(messagePreview.oldestMessageAt).toLocaleString('he-IL')
+                      : '—'}{' '}
+                    →{' '}
+                    {messagePreview.newestMessageAt
+                      ? new Date(messagePreview.newestMessageAt).toLocaleString('he-IL')
+                      : '—'}
+                  </p>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <Label className="font-bold">User Prompt (נשלח ל-Assistant):</Label>
-                <ScrollArea className="h-[400px] border rounded-lg p-4 bg-muted/50" dir="ltr">
-                  <pre className="text-xs whitespace-pre-wrap font-mono text-left">
-                    {promptPreview.userPrompt}
-                  </pre>
-                </ScrollArea>
-              </div>
+              {messagePreview.sampleMessages.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="font-bold">דוגמאות מההודעות:</Label>
+                  <ScrollArea className="h-[200px] border rounded-lg p-3 bg-muted/30">
+                    <div className="space-y-2">
+                      {messagePreview.sampleMessages.map((msg, idx) => (
+                        <div key={idx} className="p-2 rounded bg-background/50 text-sm">
+                          <span className="font-medium">{msg.sender}:</span>{' '}
+                          <span className="text-muted-foreground">{msg.preview}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
+              )}
 
-              <p className="text-sm text-muted-foreground">
-                <strong>System Prompt:</strong> מוגדר ב-OpenAI Assistant עם ID: <code className="bg-muted px-1 rounded">asst_epnwyX2RqHBRjbDdN4YQIYPs</code>
-              </p>
+              <div className="glass-card p-3 rounded-lg bg-primary/5 border border-primary/20">
+                <p className="text-sm text-muted-foreground">
+                  <strong className="text-foreground">💡 מה יקרה:</strong> תמונות יורדו כ-Base64, הודעות קוליות יתומללו, וידאו ינותח ויתומלל - והכל יישלח ל-AI לזיהוי סיכונים.
+                </p>
+              </div>
 
               <div className="flex gap-3">
-                <Button onClick={() => setPromptPreview(null)} variant="outline" size="lg" className="flex-1">
+                <Button onClick={() => setMessagePreview(null)} variant="outline" size="lg" className="flex-1">
                   חזרה
                 </Button>
                 <Button onClick={startScan} variant="glow" size="lg" className="flex-1">

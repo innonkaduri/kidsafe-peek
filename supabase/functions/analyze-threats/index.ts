@@ -228,9 +228,13 @@ serve(async (req) => {
     }
 
     const authHeader = req.headers.get("Authorization") || "";
+    console.log(`=== ANALYZE-THREATS START ===`);
     console.log(`Authenticated user ${authResult.userId} analyzing messages for child ${child_id}`);
+    console.log(`Scan ID: ${scan_id}`);
+    console.log(`Total messages received: ${messages?.length || 0}`);
 
     if (!messages || messages.length === 0) {
+      console.log(`No messages to analyze - returning empty result`);
       return new Response(
         JSON.stringify({
           threatDetected: false,
@@ -246,6 +250,14 @@ serve(async (req) => {
 
     // Limit messages to avoid token overflow - take most recent 50 messages
     const limitedMessages = messages.slice(-50);
+    console.log(`Processing ${limitedMessages.length} messages (limited from ${messages.length})`);
+    
+    // Log message types breakdown
+    const textMsgs = limitedMessages.filter(m => m.msg_type === 'text').length;
+    const imageMsgs = limitedMessages.filter(m => m.msg_type === 'image').length;
+    const audioMsgs = limitedMessages.filter(m => m.msg_type === 'audio').length;
+    const videoMsgs = limitedMessages.filter(m => m.msg_type === 'video').length;
+    console.log(`Message types: text=${textMsgs}, image=${imageMsgs}, audio=${audioMsgs}, video=${videoMsgs}`);
 
     // Process media messages - download images as Base64 and transcribe audio/video
     const mediaDataMap: Map<string, { 
@@ -314,7 +326,8 @@ serve(async (req) => {
       console.log(`⚠️ Skipped ${totalImages - imageCount} images due to limit (${MAX_IMAGES})`);
     }
 
-    console.log(`Processed media: ${imageCount} images, ${mediaDataMap.size} total items`);
+    console.log(`=== MEDIA PROCESSING COMPLETE ===`);
+    console.log(`Processed: ${imageCount} images downloaded, ${Array.from(mediaDataMap.values()).filter(v => v.transcription).length} audio transcribed, ${Array.from(mediaDataMap.values()).filter(v => v.videoDescription).length} videos analyzed`);
 
     // Build text content for messages
     const textParts: string[] = [];
@@ -446,7 +459,10 @@ ${imageParts.length > 0 ? `\nמצורפות ${imageParts.length} תמונות ל
       contentArray.push(img);
     }
 
-    console.log(`Calling OpenAI Chat Completions API with ${imageParts.length} images...`);
+    console.log(`=== CALLING OPENAI API ===`);
+    console.log(`Sending ${imageParts.length} images to GPT-4o`);
+    console.log(`Text prompt length: ${userPrompt.length} characters`);
+    console.log(`Prompt preview (first 500 chars): ${userPrompt.substring(0, 500)}...`);
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -495,12 +511,16 @@ ${imageParts.length > 0 ? `\nמצורפות ${imageParts.length} תמונות ל
       };
     }
 
-    console.log("Analysis complete:", JSON.stringify(analysisResult, null, 2));
+    console.log(`=== ANALYZE-THREATS COMPLETE ===`);
+    console.log(`Result: threatDetected=${analysisResult.threatDetected}, riskLevel=${analysisResult.riskLevel}`);
+    console.log(`Threats: ${JSON.stringify(analysisResult.threatTypes)}`);
+    console.log(`Triggers count: ${analysisResult.triggers?.length || 0}, Patterns count: ${analysisResult.patterns?.length || 0}`);
 
     return new Response(JSON.stringify(analysisResult), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
+    console.error("=== ANALYZE-THREATS ERROR ===");
     console.error("Error in analyze-threats function:", error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
