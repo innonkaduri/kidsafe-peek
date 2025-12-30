@@ -2,17 +2,26 @@ import { useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 
-const SYNC_INTERVAL_MS = 30000; // Sync every 30 seconds (backup for webhook failures)
+const SYNC_INTERVAL_MS = 60000; // Sync every 60 seconds (increased to reduce duplicates)
+const MIN_SYNC_GAP_MS = 30000; // Minimum 30 seconds between syncs
 
 export function useBackgroundSync() {
   const { user } = useAuth();
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isSyncingRef = useRef(false);
-
+  const lastSyncTimeRef = useRef<number>(0);
   const syncAllChildren = useCallback(async () => {
     if (!user || isSyncingRef.current) return;
     
+    // Prevent syncing too frequently (protects against multiple tabs/windows)
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < MIN_SYNC_GAP_MS) {
+      console.log('Background sync: Skipping - last sync was less than 30s ago');
+      return;
+    }
+    
     isSyncingRef.current = true;
+    lastSyncTimeRef.current = now;
     
     try {
       // Get all children with connected WhatsApp instances

@@ -377,6 +377,9 @@ serve(async (req) => {
     // For outgoing messages, the sender is the child
     const isChildSender = isOutgoing;
 
+    // Use idMessage from Green API as unique external ID to prevent duplicates
+    const externalMessageId = webhookData.idMessage || null;
+
     const payload = {
       child_id: childId,
       chat_id: chat.id,
@@ -388,9 +391,14 @@ serve(async (req) => {
       text_excerpt: textContent.slice(0, 100),
       media_url: mediaUrl,
       media_thumbnail_url: mediaThumbnailUrl,
+      external_message_id: externalMessageId,
     };
 
-    let { error: msgError } = await supabase.from("messages").insert([payload]);
+    // Use upsert with ignoreDuplicates to prevent duplicate messages
+    let { error: msgError } = await supabase.from("messages").upsert([payload], {
+      onConflict: 'external_message_id',
+      ignoreDuplicates: true
+    });
 
     // If insert fails with Unicode/JSON error, retry without thumbnail
     if (msgError && msgError.code === "22P02") {
