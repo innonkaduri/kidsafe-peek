@@ -279,34 +279,73 @@ ${JSON.stringify(formattedMessages, null, 2)}
         chat_name: msg.chats?.chat_name,
       }));
 
-      console.log(`Sending ${formattedMessages.length} messages for AI analysis`);
+      console.log(`[ScanTab] Sending ${formattedMessages.length} messages for AI analysis`);
+      console.log(`[ScanTab] child_id: ${child.id}, scan_id: ${scan.id}`);
 
       setProgress(40);
 
       // Call AI analysis edge function
-      const { data: analysisData, error: analysisError } = await supabase.functions.invoke(
-        'analyze-threats',
-        {
+      console.log('[ScanTab] Invoking analyze-threats edge function...');
+      let analysisData: any;
+      let analysisError: any;
+      
+      try {
+        const result = await supabase.functions.invoke('analyze-threats', {
           body: {
             child_id: child.id,
             scan_id: scan.id,
             messages: formattedMessages,
           },
-        }
-      );
+        });
+        analysisData = result.data;
+        analysisError = result.error;
+        console.log('[ScanTab] Edge function response received:', { hasData: !!analysisData, hasError: !!analysisError });
+      } catch (invokeError: any) {
+        console.error('[ScanTab] Edge function invoke failed:', invokeError);
+        // Update scan to failed status
+        await supabase.from('scans').update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          summary_json: { error: invokeError.message || 'Edge function invoke failed' },
+        }).eq('id', scan.id);
+        throw new Error(`שגיאה בחיבור לשרת AI: ${invokeError.message || 'Unknown error'}`);
+      }
 
       if (analysisError) {
-        console.error('AI analysis error:', analysisError);
+        console.error('[ScanTab] AI analysis error:', analysisError);
+        // Check for specific error types
+        const errorMessage = analysisError.message || '';
+        if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
+          toast.error('הגעת למגבלת הבקשות. נסה שוב בעוד דקה.');
+          throw new Error('מגבלת בקשות - נסה שוב בעוד דקה');
+        }
+        if (errorMessage.includes('402') || errorMessage.includes('payment')) {
+          toast.error('נדרש תשלום - הקרדיטים נגמרו');
+          throw new Error('נדרש תשלום - הקרדיטים נגמרו');
+        }
+        // Update scan to failed status
+        await supabase.from('scans').update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          summary_json: { error: errorMessage },
+        }).eq('id', scan.id);
         throw new Error(analysisError.message || 'שגיאה בניתוח AI');
       }
 
       setProgress(80);
 
       const aiResult = analysisData;
-      console.log('AI analysis result:', aiResult);
+      console.log('[ScanTab] AI analysis result:', aiResult);
 
-      // Handle rate limiting or payment errors
-      if (aiResult.error) {
+      // Handle rate limiting or payment errors from the edge function response
+      if (aiResult?.error) {
+        console.error('[ScanTab] AI result contains error:', aiResult.error);
+        // Update scan to failed status
+        await supabase.from('scans').update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          summary_json: { error: aiResult.error },
+        }).eq('id', scan.id);
         throw new Error(aiResult.error);
       }
 
