@@ -403,12 +403,14 @@ serve(async (req) => {
         .maybeSingle();
       
       if (existing) {
-        console.log("Message already exists, skipping:", externalMessageId);
+        console.log("Message already exists, skipping:", externalMessageId, "for child:", childId, "msgType:", msgType, "mediaUrl:", mediaUrl);
         return new Response(JSON.stringify({ status: "duplicate_skipped" }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
     }
+    
+    console.log("Inserting message:", externalMessageId, "msgType:", msgType, "mediaUrl:", mediaUrl ? "has_media" : "no_media", "isChildSender:", isChildSender);
 
     // Insert the message
     let { error: msgError } = await supabase.from("messages").insert([payload]);
