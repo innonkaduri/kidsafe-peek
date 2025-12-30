@@ -1,19 +1,18 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Shield, Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
+import { Shield, Mail, Lock, User, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import { supabase } from '@/integrations/supabase/client';
 
-const loginSchema = z.object({
-  email: z.string().email('כתובת אימייל לא תקינה'),
-  password: z.string().min(6, 'הסיסמה חייבת להכיל לפחות 6 תווים'),
-});
+const emailSchema = z.string().email('כתובת אימייל לא תקינה');
 
 const signupSchema = z.object({
   fullName: z.string().min(2, 'שם חייב להכיל לפחות 2 תווים'),
@@ -25,15 +24,18 @@ const signupSchema = z.object({
   path: ['confirmPassword'],
 });
 
+type LoginStep = 'email' | 'otp';
+
 export default function Auth() {
   const navigate = useNavigate();
-  const { signIn, signUp, user } = useAuth();
+  const { signUp, signInWithOtp, verifyOtp, user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Login form
+  // Login form - OTP flow
+  const [loginStep, setLoginStep] = useState<LoginStep>('email');
   const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [otpCode, setOtpCode] = useState('');
 
   // Signup form
   const [signupFullName, setSignupFullName] = useState('');
@@ -47,30 +49,52 @@ export default function Auth() {
     return null;
   }
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const result = loginSchema.safeParse({ email: loginEmail, password: loginPassword });
+    const result = emailSchema.safeParse(loginEmail);
     if (!result.success) {
       toast.error(result.error.errors[0].message);
       return;
     }
 
     setLoading(true);
-    const { error } = await signIn(loginEmail, loginPassword);
+    const { error } = await signInWithOtp(loginEmail);
     setLoading(false);
 
     if (error) {
-      if (error.message.includes('Invalid login credentials')) {
-        toast.error('פרטי התחברות שגויים');
-      } else {
-        toast.error('שגיאה בהתחברות: ' + error.message);
-      }
+      toast.error('שגיאה בשליחת קוד האימות: ' + error.message);
+      return;
+    }
+
+    toast.success('קוד אימות נשלח למייל שלך');
+    setLoginStep('otp');
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (otpCode.length !== 6) {
+      toast.error('יש להזין קוד בן 6 ספרות');
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await verifyOtp(loginEmail, otpCode);
+    setLoading(false);
+
+    if (error) {
+      toast.error('קוד אימות שגוי או פג תוקף');
       return;
     }
 
     toast.success('התחברת בהצלחה!');
     navigate('/');
+  };
+
+  const handleBackToEmail = () => {
+    setLoginStep('email');
+    setOtpCode('');
   };
 
   const handleSignup = async (e: React.FormEvent) => {
@@ -127,50 +151,85 @@ export default function Auth() {
               </TabsList>
 
               <TabsContent value="login">
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="login-email">אימייל</Label>
-                    <div className="relative">
-                      <Mail className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input
-                        id="login-email"
-                        type="email"
-                        value={loginEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
-                        placeholder="email@example.com"
-                        className="pr-10"
-                        dir="ltr"
-                      />
+                {loginStep === 'email' ? (
+                  <form onSubmit={handleSendOtp} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="login-email">אימייל</Label>
+                      <div className="relative">
+                        <Mail className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          id="login-email"
+                          type="email"
+                          value={loginEmail}
+                          onChange={(e) => setLoginEmail(e.target.value)}
+                          placeholder="email@example.com"
+                          className="pr-10"
+                          dir="ltr"
+                        />
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="login-password">סיסמה</Label>
-                    <div className="relative">
-                      <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input
-                        id="login-password"
-                        type={showPassword ? 'text' : 'password'}
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="pr-10 pl-10"
-                        dir="ltr"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    <p className="text-sm text-muted-foreground text-center">
+                      נשלח קוד אימות חד פעמי למייל שלך
+                    </p>
+
+                    <Button type="submit" variant="glow" className="w-full" disabled={loading}>
+                      {loading ? 'שולח קוד...' : 'שלח קוד אימות'}
+                    </Button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleVerifyOtp} className="space-y-4">
+                    <button
+                      type="button"
+                      onClick={handleBackToEmail}
+                      className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <ArrowRight className="w-4 h-4" />
+                      חזרה לאימייל
+                    </button>
+
+                    <div className="text-center space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        הזן את הקוד שנשלח אל
+                      </p>
+                      <p className="font-medium" dir="ltr">{loginEmail}</p>
+                    </div>
+
+                    <div className="flex justify-center py-4">
+                      <InputOTP
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={setOtpCode}
                       >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
+                        <InputOTPGroup>
+                          <InputOTPSlot index={0} />
+                          <InputOTPSlot index={1} />
+                          <InputOTPSlot index={2} />
+                          <InputOTPSlot index={3} />
+                          <InputOTPSlot index={4} />
+                          <InputOTPSlot index={5} />
+                        </InputOTPGroup>
+                      </InputOTP>
                     </div>
-                  </div>
 
-                  <Button type="submit" variant="glow" className="w-full" disabled={loading}>
-                    {loading ? 'מתחבר...' : 'התחברות'}
-                  </Button>
-                </form>
+                    <p className="text-xs text-muted-foreground text-center">
+                      הקוד תקף ל-10 דקות
+                    </p>
+
+                    <Button type="submit" variant="glow" className="w-full" disabled={loading || otpCode.length !== 6}>
+                      {loading ? 'מאמת...' : 'התחברות'}
+                    </Button>
+
+                    <button
+                      type="button"
+                      onClick={handleSendOtp}
+                      className="w-full text-sm text-primary hover:underline"
+                      disabled={loading}
+                    >
+                      לא קיבלת? שלח שוב
+                    </button>
+                  </form>
+                )}
               </TabsContent>
 
               <TabsContent value="signup">
