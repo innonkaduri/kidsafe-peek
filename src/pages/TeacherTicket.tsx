@@ -236,6 +236,33 @@ export default function TeacherTicket() {
         message: `✅ סטטוס: ${STATUS_OPTIONS.find(s => s.value === newStatus)?.label || newStatus}\n\n${teacherResponse}`
       });
 
+      // Send email to parent
+      try {
+        const { data: parentProfile } = await supabase
+          .from('profiles')
+          .select('email, full_name')
+          .eq('id', alert.parent_user_id)
+          .single();
+
+        if (parentProfile?.email) {
+          await supabase.functions.invoke('send-teacher-feedback-email', {
+            body: {
+              to: parentProfile.email,
+              parent_name: parentProfile.full_name,
+              child_name: alert.children?.display_name || 'ילד/ה',
+              teacher_name: alert.teacher_name || user?.email,
+              teacher_response: teacherResponse,
+              action_taken: ACTION_OPTIONS.find(a => a.value === actionTaken)?.label || actionTaken,
+              status: newStatus
+            }
+          });
+          console.log('Teacher feedback email sent to parent');
+        }
+      } catch (emailError) {
+        console.error('Error sending feedback email:', emailError);
+        // Don't fail the whole operation if email fails
+      }
+
       toast({ title: 'המשוב נשלח בהצלחה', description: 'ההורה יקבל הודעה על המשוב שלך' });
       navigate('/teacher-portal');
     } catch (error) {
