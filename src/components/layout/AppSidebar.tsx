@@ -1,7 +1,9 @@
-import { Home, Users, Bell, LayoutDashboard, Settings, Shield, Star, Heart } from 'lucide-react';
+import { Home, Users, Bell, LayoutDashboard, Settings, Shield, Star, Heart, LogOut } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useRole } from '@/hooks/useRole';
+import { useAuth } from '@/hooks/useAuth';
+import { Button } from '@/components/ui/button';
 
 import {
   Sidebar,
@@ -29,8 +31,15 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const location = useLocation();
+  const navigate = useNavigate();
   const currentPath = location.pathname;
   const { hasRole } = useRole();
+  const { signOut } = useAuth();
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/auth');
+  };
 
   const menuItems: MenuItem[] = [
     ...baseMenuItems,
@@ -93,16 +102,26 @@ export function AppSidebar() {
 
       {/* Footer */}
       <SidebarFooter className="p-4 border-t border-sidebar-border">
-        <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center">
-            <Star className="w-5 h-5 text-white" />
-          </div>
-          {!collapsed && (
-            <div className="flex flex-col">
-              <span className="font-heebo font-semibold text-sm text-foreground">SafeKids Guardian</span>
-              <span className="text-xs text-sidebar-foreground">הגנה דיגיטלית לילדים</span>
+        <div className={`flex flex-col gap-3 ${collapsed ? 'items-center' : ''}`}>
+          <Button
+            variant="ghost"
+            onClick={handleLogout}
+            className={`flex items-center gap-3 text-destructive hover:text-destructive hover:bg-destructive/10 ${collapsed ? 'justify-center px-2' : 'justify-start w-full'}`}
+          >
+            <LogOut className="w-5 h-5" />
+            {!collapsed && <span className="font-assistant">התנתק</span>}
+          </Button>
+          <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center">
+              <Star className="w-5 h-5 text-white" />
             </div>
-          )}
+            {!collapsed && (
+              <div className="flex flex-col">
+                <span className="font-heebo font-semibold text-sm text-foreground">SafeKids Guardian</span>
+                <span className="text-xs text-sidebar-foreground">הגנה דיגיטלית לילדים</span>
+              </div>
+            )}
+          </div>
         </div>
       </SidebarFooter>
     </Sidebar>
