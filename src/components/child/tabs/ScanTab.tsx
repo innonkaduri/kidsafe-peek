@@ -23,12 +23,7 @@ interface MessagePreview {
   videoCount: number;
   oldestMessageAt: string | null;
   newestMessageAt: string | null;
-  sampleMessages: Array<{
-    sender: string;
-    type: string;
-    preview: string;
-    time: string;
-  }>;
+  exactPrompt: string;
 }
 
 export function ScanTab({ child, onScanComplete }: ScanTabProps) {
@@ -60,7 +55,84 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     fetchLastScan();
   }, [child.id]);
 
-  // Fetch messages and build simple preview
+  // Build the exact prompt that will be sent to AI (same format as analyze-threats)
+  const buildExactPrompt = (messages: any[]): string => {
+    const limitedMessages = messages.slice(-50);
+    const textParts: string[] = [];
+
+    for (const msg of limitedMessages) {
+      let messageText = "";
+
+      if (msg.msg_type === "text") {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: ${msg.text_content || ""}`;
+      } else if (msg.msg_type === "audio" && msg.media_url) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [הודעה קולית - תמלול יתבצע בזמן הסריקה]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      } else if (msg.msg_type === "image" && msg.media_url) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [תמונה - תיבדק בזמן הסריקה]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      } else if (msg.msg_type === "video" && msg.media_url) {
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [וידאו - תמלול ותיאור ויזואלי יתבצעו בזמן הסריקה]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      } else if (msg.msg_type !== "text") {
+        const mediaLabel = msg.msg_type === "audio" ? "הודעה קולית" : msg.msg_type === "video" ? "וידאו" : "תמונה";
+        messageText = `[${msg.message_timestamp}] ${msg.sender_label}${msg.is_child_sender ? " (הילד/ה)" : ""}: [${mediaLabel}]`;
+        if (msg.text_content) {
+          messageText += ` כיתוב: ${msg.text_content}`;
+        }
+      }
+
+      if (messageText) {
+        textParts.push(messageText);
+      }
+    }
+
+    const systemInstructions = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
+
+המטרה שלך:
+לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
+
+❗ חשוב מאוד:
+אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
+עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
+
+סוגי סיכון שמותר לזהות:
+- חרם, השפלה מתמשכת או אלימות רגשית קשה
+- איומים פיזיים מפורשים
+- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
+- סמים, אלכוהול או שידול לשימוש
+- פגיעה עצמית או עידוד לפגיעה עצמית
+- סחיטה, איום או מניפולציה מסוכנת
+
+❌ אסור להתריע על:
+- שיח יומיומי, בדיחות, קללות קלות
+- פוליטיקה, חדשות, דעות
+- ויכוחים רגילים
+- שפה בוטה בלי איום ממשי
+- תוכן לא נעים אך לא מסוכן
+
+בנוסף, בדוק היטב את התמונות המצורפות - חפש תוכן לא הולם, סימני סיכון, או כל דבר חשוד.`;
+
+    const userPrompt = `הודעות לניתוח:
+
+${textParts.join("\n")}
+
+נא לנתח ולהחזיר תשובה בפורמט JSON.`;
+
+    return `=== SYSTEM PROMPT ===
+${systemInstructions}
+
+=== USER PROMPT ===
+${userPrompt}`;
+  };
+
+  // Fetch messages and build exact prompt preview
   const fetchMessagesPreview = async () => {
     try {
       let query = supabase
@@ -95,27 +167,8 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
       const audioCount = allMessages.filter(m => m.msg_type === 'audio' && m.media_url).length;
       const videoCount = allMessages.filter(m => m.msg_type === 'video' && m.media_url).length;
 
-      // Get sample messages (first 3 and last 3)
-      const limitedMessages = allMessages.slice(-50);
-      const sampleMessages = [
-        ...limitedMessages.slice(0, 3),
-        ...limitedMessages.slice(-3)
-      ].filter((msg, index, self) => 
-        self.findIndex(m => m.id === msg.id) === index
-      ).map((msg: any) => {
-        let preview = msg.text_content || '';
-        if (msg.msg_type === 'image') preview = '🖼️ תמונה';
-        else if (msg.msg_type === 'audio') preview = '🎤 הודעה קולית';
-        else if (msg.msg_type === 'video') preview = '🎬 וידאו';
-        else if (!preview) preview = '[הודעה ריקה]';
-        
-        return {
-          sender: msg.sender_label,
-          type: msg.msg_type,
-          preview: preview.slice(0, 100),
-          time: msg.message_timestamp,
-        };
-      });
+      // Build the exact prompt
+      const exactPrompt = buildExactPrompt(allMessages);
 
       setMessagePreview({
         messagesCount: allMessages.length,
@@ -125,7 +178,7 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
         videoCount,
         oldestMessageAt: allMessages[0]?.message_timestamp ?? null,
         newestMessageAt: allMessages[allMessages.length - 1]?.message_timestamp ?? null,
-        sampleMessages,
+        exactPrompt,
       });
     } catch (error: any) {
       console.error('Error fetching messages preview:', error);
@@ -474,25 +527,18 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
                 </div>
               </div>
 
-              {messagePreview.sampleMessages.length > 0 && (
-                <div className="space-y-2">
-                  <Label className="font-bold">דוגמאות מההודעות:</Label>
-                  <ScrollArea className="h-[200px] border rounded-lg p-3 bg-muted/30">
-                    <div className="space-y-2">
-                      {messagePreview.sampleMessages.map((msg, idx) => (
-                        <div key={idx} className="p-2 rounded bg-background/50 text-sm">
-                          <span className="font-medium">{msg.sender}:</span>{' '}
-                          <span className="text-muted-foreground">{msg.preview}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </ScrollArea>
-                </div>
-              )}
+              <div className="space-y-2">
+                <Label className="font-bold">הפרומפט המדויק שיישלח ל-AI:</Label>
+                <ScrollArea className="h-[400px] border rounded-lg p-3 bg-muted/30">
+                  <pre className="text-xs whitespace-pre-wrap font-mono text-foreground" dir="rtl">
+                    {messagePreview.exactPrompt}
+                  </pre>
+                </ScrollArea>
+              </div>
 
               <div className="glass-card p-3 rounded-lg bg-primary/5 border border-primary/20">
                 <p className="text-sm text-muted-foreground">
-                  <strong className="text-foreground">💡 מה יקרה:</strong> תמונות יורדו כ-Base64, הודעות קוליות יתומללו, וידאו ינותח ויתומלל - והכל יישלח ל-AI לזיהוי סיכונים.
+                  <strong className="text-foreground">💡 הערה:</strong> בזמן הסריקה, תמונות יורדו כ-Base64, הודעות קוליות יתומללו, וידאו ינותח ויתומלל - והפרומפט יתעדכן עם התוצאות.
                 </p>
               </div>
 
