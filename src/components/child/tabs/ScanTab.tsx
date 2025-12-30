@@ -312,7 +312,7 @@ ${JSON.stringify(formattedMessages, null, 2)}
 
       // Create finding - save even when no threats for record keeping
       if (scan) {
-        const { error: findingError } = await supabase.from('findings').insert({
+        const { data: findingData, error: findingError } = await supabase.from('findings').insert({
           scan_id: scan.id,
           child_id: child.id,
           threat_detected: aiResult.threatDetected || false,
@@ -320,10 +320,48 @@ ${JSON.stringify(formattedMessages, null, 2)}
           threat_types: aiResult.threatTypes || [],
           explanation: aiResult.explanation || 'לא זוהו סיכונים',
           ai_response_encrypted: aiResult, // Store full AI response
-        });
+        }).select('id').single();
 
         if (findingError) {
           console.error('Error saving finding:', findingError);
+        }
+
+        // Send email alert to parent if threat detected
+        if (aiResult.threatDetected && aiResult.riskLevel) {
+          try {
+            const { data: session } = await supabase.auth.getSession();
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('email')
+              .eq('id', session?.session?.user?.id)
+              .single();
+
+            if (profile?.email) {
+              await supabase.functions.invoke('send-alert-email', {
+                body: {
+                  to: profile.email,
+                  child_name: child.display_name,
+                  risk_level: aiResult.riskLevel,
+                  summary: aiResult.explanation || 'זוהתה התראה שמחייבת תשומת לב',
+                  recommendations: aiResult.threatTypes?.map((type: string) => {
+                    const recommendations: Record<string, string> = {
+                      'חרם': 'שוחחו עם הילד על מה שקורה בבית הספר ופנו לצוות החינוכי',
+                      'בריונות': 'תעדו את האירועים ופנו להנהלת בית הספר',
+                      'תוכן מיני': 'שוחחו עם הילד בזהירות ושקלו פנייה לגורם מקצועי',
+                      'סחיטה': 'דווחו לרשויות ואל תיענו לדרישות הסוחט',
+                      'אלימות': 'תעדו ודווחו לרשויות המתאימות',
+                      'סמים': 'שוחחו עם הילד ופנו לייעוץ מקצועי',
+                    };
+                    return recommendations[type] || `בדקו את הנושא: ${type}`;
+                  })
+                }
+              });
+              console.log('Alert email sent to parent');
+            }
+          } catch (emailError) {
+            console.error('Error sending alert email:', emailError);
+            // Don't fail the scan if email fails
+          }
         }
 
         // Create patterns

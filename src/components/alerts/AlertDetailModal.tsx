@@ -354,12 +354,19 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
     };
 
     // Share to teacher in database
-    const shareToTeacher = async () => {
+  const shareToTeacher = async () => {
       try {
         const { data: session } = await supabase.auth.getSession();
         if (!session?.session?.user) throw new Error('User not authenticated');
 
-        const { error } = await supabase
+        // Get parent profile for the email
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', session.session.user.id)
+          .single();
+
+        const { data: insertedAlert, error } = await supabase
           .from('teacher_alerts')
           .insert({
             child_id: finding.child_id,
@@ -369,9 +376,31 @@ export function AlertDetailModal({ finding, open, onOpenChange, onUpdate }: Aler
             severity: finding.risk_level || 'medium',
             category: finding.threat_types?.[0] || 'אחר',
             parent_message: finding.explanation || 'זוהתה התראה שמחייבת תשומת לב'
-          });
+          })
+          .select('id')
+          .single();
 
         if (error) throw error;
+
+        // Send email to teacher
+        try {
+          await supabase.functions.invoke('send-teacher-alert-email', {
+            body: {
+              to: teacherEmail,
+              child_name: finding.child_name || 'ילד/ה',
+              parent_name: profile?.full_name,
+              severity: finding.risk_level || 'medium',
+              category: finding.threat_types?.[0] || 'אחר',
+              summary: finding.explanation || 'זוהתה התראה שמחייבת תשומת לב',
+              ticket_id: insertedAlert?.id || 'unknown'
+            }
+          });
+          console.log('Teacher alert email sent successfully');
+        } catch (emailError) {
+          console.error('Error sending teacher email:', emailError);
+          // Don't fail the whole operation if email fails
+        }
+
         toast.success('ההתראה שותפה עם המורה בהצלחה');
       } catch (error) {
         console.error('Error sharing with teacher:', error);

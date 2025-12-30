@@ -28,4 +28,13 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.send-alert-email]
-verify_jwt = true
+verify_jwt = false
+
+[functions.send-otp-email]
+verify_jwt = false
+
+[functions.send-teacher-alert-email]
+verify_jwt = false
+
+[functions.send-teacher-feedback-email]
+verify_jwt = false
