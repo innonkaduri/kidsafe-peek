@@ -429,6 +429,7 @@ export type Database = {
           chat_id: string
           child_id: string
           created_at: string | null
+          external_message_id: string | null
           id: string
           image_caption: string | null
           image_flags: string[] | null
@@ -445,6 +446,7 @@ export type Database = {
           chat_id: string
           child_id: string
           created_at?: string | null
+          external_message_id?: string | null
           id?: string
           image_caption?: string | null
           image_flags?: string[] | null
@@ -461,6 +463,7 @@ export type Database = {
           chat_id?: string
           child_id?: string
           created_at?: string | null
+          external_message_id?: string | null
           id?: string
           image_caption?: string | null
           image_flags?: string[] | null

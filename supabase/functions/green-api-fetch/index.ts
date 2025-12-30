@@ -363,17 +363,31 @@ serve(async (req) => {
             text_excerpt: textContent.substring(0, 100),
             media_url: msg.downloadUrl || null,
             media_thumbnail_url: msg.jpegThumbnail || null,
+            external_message_id: msg.idMessage || null,
           });
         }
 
-        // Batch insert all new messages at once
+        // Batch insert all new messages at once with ON CONFLICT DO NOTHING
         if (messagesToInsert.length > 0) {
-          const { error: insertError } = await supabase
+          const { error: insertError, count } = await supabase
             .from("messages")
-            .insert(messagesToInsert);
+            .upsert(messagesToInsert, { 
+              onConflict: 'external_message_id',
+              ignoreDuplicates: true 
+            });
           
           if (insertError) {
-            console.error("Batch insert error:", insertError.message);
+            // If external_message_id conflict fails, try without it (unique content index will catch duplicates)
+            console.log("Upsert with external_message_id failed, trying regular insert:", insertError.message);
+            const { error: fallbackError } = await supabase
+              .from("messages")
+              .insert(messagesToInsert);
+            
+            if (fallbackError && !fallbackError.message.includes('duplicate')) {
+              console.error("Batch insert error:", fallbackError.message);
+            } else {
+              totalMessagesImported += messagesToInsert.length;
+            }
           } else {
             totalMessagesImported += messagesToInsert.length;
           }
