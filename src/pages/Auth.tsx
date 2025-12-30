@@ -80,11 +80,24 @@ export default function Auth() {
     }
 
     setLoading(true);
-    const { error } = await verifyOtp(loginEmail, otpCode);
+    const { error, userExists, magicLink } = await verifyOtp(loginEmail, otpCode);
     setLoading(false);
 
     if (error) {
-      toast.error('קוד אימות שגוי או פג תוקף');
+      toast.error(error.message || 'קוד אימות שגוי או פג תוקף');
+      return;
+    }
+
+    // If magic link was returned, user will be redirected
+    if (magicLink) {
+      toast.success('מעביר אותך...');
+      return;
+    }
+
+    // If user doesn't exist, they need to sign up
+    if (userExists === false) {
+      toast.info('האימייל לא רשום במערכת. אנא הירשם תחילה.');
+      setLoginStep('email');
       return;
     }
 

@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,7 +12,6 @@ const corsHeaders = {
 
 interface OtpEmailRequest {
   to: string;
-  otp_code: string;
   type: 'login' | 'password_reset';
   user_name?: string;
 }
@@ -20,12 +22,12 @@ const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
-    const { to, otp_code, type, user_name }: OtpEmailRequest = await req.json();
+    const { to, type, user_name }: OtpEmailRequest = await req.json();
 
     // Validate required fields
-    if (!to || !otp_code || !type) {
+    if (!to || !type) {
       return new Response(
-        JSON.stringify({ success: false, error: "Missing required fields: to, otp_code, type" }),
+        JSON.stringify({ success: false, error: "Missing required fields: to, type" }),
         { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
@@ -36,6 +38,38 @@ const handler = async (req: Request): Promise<Response> => {
       return new Response(
         JSON.stringify({ success: false, error: "Invalid email format" }),
         { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
+      );
+    }
+
+    // Generate 6-digit OTP
+    const otp_code = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Store OTP in database using service role
+    const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+    
+    // Delete any existing OTP for this email
+    await supabase
+      .from('otp_codes')
+      .delete()
+      .eq('email', to)
+      .eq('type', type);
+    
+    // Insert new OTP (expires in 10 minutes)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const { error: insertError } = await supabase
+      .from('otp_codes')
+      .insert({
+        email: to,
+        code: otp_code,
+        type,
+        expires_at: expiresAt,
+      });
+
+    if (insertError) {
+      console.error("Error storing OTP:", insertError);
+      return new Response(
+        JSON.stringify({ success: false, error: "Failed to generate OTP" }),
+        { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
 
