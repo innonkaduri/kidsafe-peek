@@ -242,7 +242,143 @@ serve(async (req) => {
         }
       }
 
-      // Delete from DB
+      // ========== CLEANUP ALL CHILD DATA ==========
+      // Golden rule: When deleting a WhatsApp connection, wipe ALL associated data
+      console.log(`[CLEANUP] Starting data cleanup for child_id: ${child_id}`);
+
+      // 1. Get all chat IDs for this child (needed for patterns and scan_checkpoints)
+      const { data: chats } = await supabase
+        .from("chats")
+        .select("id")
+        .eq("child_id", child_id);
+      const chatIds = chats?.map(c => c.id) || [];
+      console.log(`[CLEANUP] Found ${chatIds.length} chats to delete`);
+
+      // 2. Get all scan IDs for this child (needed for patterns)
+      const { data: scans } = await supabase
+        .from("scans")
+        .select("id")
+        .eq("child_id", child_id);
+      const scanIds = scans?.map(s => s.id) || [];
+      console.log(`[CLEANUP] Found ${scanIds.length} scans to delete`);
+
+      // 3. Get all finding IDs for this child (needed for evidence_items)
+      const { data: findings } = await supabase
+        .from("findings")
+        .select("id")
+        .eq("child_id", child_id);
+      const findingIds = findings?.map(f => f.id) || [];
+      console.log(`[CLEANUP] Found ${findingIds.length} findings to delete`);
+
+      // 4. Delete in correct order (children tables first, then parents)
+      
+      // Delete evidence_items (depends on findings)
+      if (findingIds.length > 0) {
+        const { error: evErr } = await supabase
+          .from("evidence_items")
+          .delete()
+          .in("finding_id", findingIds);
+        if (evErr) console.error("[CLEANUP] evidence_items error:", evErr);
+        else console.log("[CLEANUP] Deleted evidence_items");
+      }
+
+      // Delete patterns (depends on scans and chats)
+      if (scanIds.length > 0) {
+        const { error: patErr } = await supabase
+          .from("patterns")
+          .delete()
+          .in("scan_id", scanIds);
+        if (patErr) console.error("[CLEANUP] patterns error:", patErr);
+        else console.log("[CLEANUP] Deleted patterns");
+      }
+
+      // Delete scan_checkpoints (depends on chats)
+      if (chatIds.length > 0) {
+        const { error: scErr } = await supabase
+          .from("scan_checkpoints")
+          .delete()
+          .in("chat_id", chatIds);
+        if (scErr) console.error("[CLEANUP] scan_checkpoints error:", scErr);
+        else console.log("[CLEANUP] Deleted scan_checkpoints");
+      }
+
+      // Delete small_signals (depends on messages, but we'll delete by child_id through messages)
+      const { data: messages } = await supabase
+        .from("messages")
+        .select("id")
+        .eq("child_id", child_id);
+      const messageIds = messages?.map(m => m.id) || [];
+      console.log(`[CLEANUP] Found ${messageIds.length} messages to delete`);
+
+      if (messageIds.length > 0) {
+        const { error: ssErr } = await supabase
+          .from("small_signals")
+          .delete()
+          .in("message_id", messageIds);
+        if (ssErr) console.error("[CLEANUP] small_signals error:", ssErr);
+        else console.log("[CLEANUP] Deleted small_signals");
+      }
+
+      // Delete findings (depends on child_id)
+      const { error: findErr } = await supabase
+        .from("findings")
+        .delete()
+        .eq("child_id", child_id);
+      if (findErr) console.error("[CLEANUP] findings error:", findErr);
+      else console.log("[CLEANUP] Deleted findings");
+
+      // Delete smart_decisions (depends on child_id)
+      const { error: sdErr } = await supabase
+        .from("smart_decisions")
+        .delete()
+        .eq("child_id", child_id);
+      if (sdErr) console.error("[CLEANUP] smart_decisions error:", sdErr);
+      else console.log("[CLEANUP] Deleted smart_decisions");
+
+      // Delete scans (depends on child_id)
+      const { error: scanErr } = await supabase
+        .from("scans")
+        .delete()
+        .eq("child_id", child_id);
+      if (scanErr) console.error("[CLEANUP] scans error:", scanErr);
+      else console.log("[CLEANUP] Deleted scans");
+
+      // Delete messages (depends on child_id)
+      const { error: msgErr } = await supabase
+        .from("messages")
+        .delete()
+        .eq("child_id", child_id);
+      if (msgErr) console.error("[CLEANUP] messages error:", msgErr);
+      else console.log("[CLEANUP] Deleted messages");
+
+      // Delete chats (depends on child_id)
+      const { error: chatErr } = await supabase
+        .from("chats")
+        .delete()
+        .eq("child_id", child_id);
+      if (chatErr) console.error("[CLEANUP] chats error:", chatErr);
+      else console.log("[CLEANUP] Deleted chats");
+
+      // Delete imports (depends on child_id)
+      const { error: impErr } = await supabase
+        .from("imports")
+        .delete()
+        .eq("child_id", child_id);
+      if (impErr) console.error("[CLEANUP] imports error:", impErr);
+      else console.log("[CLEANUP] Deleted imports");
+
+      // Delete usage_meter (depends on child_id)
+      const { error: umErr } = await supabase
+        .from("usage_meter")
+        .delete()
+        .eq("child_id", child_id);
+      if (umErr) console.error("[CLEANUP] usage_meter error:", umErr);
+      else console.log("[CLEANUP] Deleted usage_meter");
+
+      console.log(`[CLEANUP] Completed data cleanup for child_id: ${child_id}`);
+      // ========== END CLEANUP ==========
+
+      // Delete connector_credentials
       await supabase.from("connector_credentials").delete().eq("id", cred.id);
 
       return new Response(
