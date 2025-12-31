@@ -1,320 +1,41 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Smartphone, Shield, Plus, RefreshCw, QrCode, CheckCircle, Wifi, Server, Lock, Zap } from 'lucide-react';
+import { Smartphone, Shield, Plus, RefreshCw, QrCode, CheckCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Child } from '@/types/database';
-import { supabase } from '@/integrations/supabase/client';
-import { toast } from 'sonner';
+import { useWhatsAppConnection } from '@/hooks/useWhatsAppConnection';
+import { QR_LOADING_STAGES, getCreationProgressMessage } from '@/constants/whatsapp';
+import { useEffect } from 'react';
 
 interface WhatsAppOnboardingScreenProps {
   child: Child;
   onConnected: () => void;
 }
 
-type ConnectionStatus = 
-  | 'loading' 
-  | 'no_instance' 
-  | 'creating' 
-  | 'waiting_scan' 
-  | 'connected';
-
-// Polling for instance readiness instead of fixed wait
-const MAX_CREATION_WAIT_MS = 60000;
-const CREATION_POLL_INTERVAL_MS = 3000;
-
-// QR loading stages for visual feedback
-const QR_LOADING_STAGES = [
-  { progress: 10, text: 'מתחבר לשרת...', icon: Server },
-  { progress: 30, text: 'מאמת הרשאות...', icon: Lock },
-  { progress: 50, text: 'מאתחל מופע...', icon: Wifi },
-  { progress: 70, text: 'מכין קוד QR...', icon: QrCode },
-  { progress: 90, text: 'כמעט מוכן...', icon: Zap },
-];
-
 export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboardingScreenProps) {
-  const [status, setStatus] = useState<ConnectionStatus>('loading');
-  const [qrCode, setQrCode] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [creationProgress, setCreationProgress] = useState(0);
-  const [qrLoadingProgress, setQrLoadingProgress] = useState(0);
-  const [qrLoadingStage, setQrLoadingStage] = useState(0);
-  
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const creationTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const qrLoadingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isInitializedRef = useRef(false);
-  const isFetchingRef = useRef(false);
+  const {
+    status,
+    qrCode,
+    errorMessage,
+    creationProgress,
+    qrLoadingProgress,
+    qrLoadingStage,
+    createInstance,
+    fetchQR,
+    clearIntervals,
+  } = useWhatsAppConnection({
+    childId: child.id,
+    onConnected: () => setTimeout(onConnected, 1500),
+    autoInitialize: true,
+  });
 
-  const clearIntervals = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    if (qrRefreshIntervalRef.current) {
-      clearInterval(qrRefreshIntervalRef.current);
-      qrRefreshIntervalRef.current = null;
-    }
-    if (creationTimerRef.current) {
-      clearInterval(creationTimerRef.current);
-      creationTimerRef.current = null;
-    }
-    if (qrLoadingIntervalRef.current) {
-      clearInterval(qrLoadingIntervalRef.current);
-      qrLoadingIntervalRef.current = null;
-    }
-  }, []);
-
-  const startQrLoadingAnimation = useCallback(() => {
-    setQrLoadingProgress(0);
-    setQrLoadingStage(0);
-    
-    let stageIndex = 0;
-    qrLoadingIntervalRef.current = setInterval(() => {
-      if (stageIndex < QR_LOADING_STAGES.length - 1) {
-        stageIndex++;
-        setQrLoadingStage(stageIndex);
-        setQrLoadingProgress(QR_LOADING_STAGES[stageIndex].progress);
-      }
-    }, 800);
-  }, []);
-
-  const stopQrLoadingAnimation = useCallback(() => {
-    if (qrLoadingIntervalRef.current) {
-      clearInterval(qrLoadingIntervalRef.current);
-      qrLoadingIntervalRef.current = null;
-    }
-    setQrLoadingProgress(100);
-  }, []);
-
-  const checkInstanceStatus = useCallback(async () => {
-    if (isFetchingRef.current) return false;
-    isFetchingRef.current = true;
-    
-    try {
-      const { data, error } = await supabase.functions.invoke('green-api-partner', {
-        body: { action: 'getStatus', child_id: child.id },
-      });
-
-      if (error) throw error;
-
-      if (!data.hasInstance) {
-        setStatus('no_instance');
-        clearIntervals();
-        return false;
-      }
-
-      if (data.status === 'authorized') {
-        setStatus('connected');
-        setQrCode(null);
-        clearIntervals();
-        toast.success('WhatsApp מחובר בהצלחה!');
-        setTimeout(() => onConnected(), 1500);
-        return true;
-      }
-
-      return false;
-    } catch (error) {
-      console.error('Status check error:', error);
-      return false;
-    } finally {
-      isFetchingRef.current = false;
-    }
-  }, [child.id, clearIntervals, onConnected]);
-
-  const fetchQR = useCallback(async () => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    
-    try {
-      setErrorMessage(null);
-      
-      const { data, error } = await supabase.functions.invoke('green-api-qr', {
-        body: { action: 'qr', child_id: child.id },
-      });
-
-      if (error) throw error;
-
-      if (data.type === 'noInstance') {
-        setStatus('no_instance');
-        clearIntervals();
-        stopQrLoadingAnimation();
-        return;
-      }
-
-      // Instance is still initializing or server busy - keep waiting
-      if (data.notReady || data.retryable || data.rateLimited) {
-        console.log('Instance initializing or server busy, waiting...');
-        return;
-      }
-
-      // Handle other errors gracefully
-      if (data.type === 'error' && !data.message?.includes('already')) {
-        console.log('QR fetch error, will retry:', data.message);
-        return;
-      }
-
-      if (data.type === 'qrCode' && data.message) {
-        stopQrLoadingAnimation();
-        setQrCode(data.message);
-        setStatus('waiting_scan');
-      } else if (data.type === 'alreadyLogged') {
-        stopQrLoadingAnimation();
-        setStatus('connected');
-        setQrCode(null);
-        clearIntervals();
-        toast.success('WhatsApp מחובר בהצלחה!');
-        setTimeout(() => onConnected(), 1500);
-      }
-    } catch (error: any) {
-      console.error('QR fetch error:', error);
-    } finally {
-      isFetchingRef.current = false;
-    }
-  }, [child.id, clearIntervals, onConnected, stopQrLoadingAnimation]);
-
-  // Initialize once on mount
   useEffect(() => {
-    if (isInitializedRef.current) return;
-    isInitializedRef.current = true;
-
-    const initialize = async () => {
-      setStatus('loading');
-      clearIntervals();
-      
-      const isConnected = await checkInstanceStatus();
-      
-      if (!isConnected) {
-        const { data } = await supabase.functions.invoke('green-api-partner', {
-          body: { action: 'getStatus', child_id: child.id },
-        });
-
-        if (data?.hasInstance) {
-          setStatus('waiting_scan');
-          
-          // Start loading animation immediately
-          startQrLoadingAnimation();
-          
-          // Fetch QR immediately - no delay
-          fetchQR();
-          
-          // Poll for status every 8 seconds (faster)
-          pollIntervalRef.current = setInterval(async () => {
-            const connected = await checkInstanceStatus();
-            if (connected) clearIntervals();
-          }, 8000);
-          
-          // Refresh QR every 15 seconds (faster)
-          qrRefreshIntervalRef.current = setInterval(fetchQR, 15000);
-        } else {
-          setStatus('no_instance');
-        }
-      }
-    };
-
-    initialize();
-    
     return () => clearIntervals();
-  }, [child.id, checkInstanceStatus, fetchQR, clearIntervals, startQrLoadingAnimation]);
-
-  const createInstance = async (e?: React.MouseEvent) => {
-    e?.preventDefault();
-    e?.stopPropagation();
-    
-    setStatus('creating');
-    setErrorMessage(null);
-    setCreationProgress(0);
-    
-    const startTime = Date.now();
-    
-    // Smooth progress animation
-    const progressInterval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      // Progress goes up to 85% during polling, leaves room for final steps
-      const progress = Math.min((elapsed / MAX_CREATION_WAIT_MS) * 85, 85);
-      setCreationProgress(progress);
-    }, 100);
-    creationTimerRef.current = progressInterval;
-    
-    try {
-      const { data, error } = await supabase.functions.invoke('green-api-partner', {
-        body: { action: 'createInstance', child_id: child.id },
-      });
-
-      if (error) throw error;
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      if (data.status === 'already_connected') {
-        clearInterval(progressInterval);
-        creationTimerRef.current = null;
-        setCreationProgress(100);
-        toast.success('WhatsApp כבר מחובר!');
-        setTimeout(() => onConnected(), 1500);
-        return;
-      }
-
-      // Poll for instance readiness instead of fixed wait
-      let isReady = false;
-      const pollStartTime = Date.now();
-      
-      while (!isReady && (Date.now() - pollStartTime) < MAX_CREATION_WAIT_MS) {
-        await new Promise(resolve => setTimeout(resolve, CREATION_POLL_INTERVAL_MS));
-        
-        try {
-          const { data: statusData } = await supabase.functions.invoke('green-api-partner', {
-            body: { action: 'getStatus', child_id: child.id },
-          });
-          
-          if (statusData?.hasInstance && statusData?.stateInstance) {
-            // Instance exists and has a state - it's ready
-            isReady = true;
-            setCreationProgress(95);
-          }
-        } catch (e) {
-          console.log('Status check during creation:', e);
-        }
-      }
-      
-      clearInterval(progressInterval);
-      creationTimerRef.current = null;
-      setCreationProgress(100);
-      
-      toast.success('מופע נוצר בהצלחה! מחכה לסריקת QR...');
-      
-      // Start waiting for QR
-      setStatus('waiting_scan');
-      
-      // Start loading animation
-      startQrLoadingAnimation();
-      
-      // Start fetching QR immediately
-      fetchQR();
-      
-      // Set up polling intervals (faster)
-      pollIntervalRef.current = setInterval(async () => {
-        const connected = await checkInstanceStatus();
-        if (connected) clearIntervals();
-      }, 8000);
-      
-      qrRefreshIntervalRef.current = setInterval(fetchQR, 15000);
-      
-    } catch (error: any) {
-      clearInterval(progressInterval);
-      creationTimerRef.current = null;
-      console.error('Create instance error:', error);
-      setErrorMessage(error.message || 'שגיאה ביצירת מופע');
-      setStatus('no_instance');
-      toast.error('שגיאה ביצירת חיבור: ' + error.message);
-    }
-  };
+  }, [clearIntervals]);
 
   const currentLoadingStage = QR_LOADING_STAGES[qrLoadingStage];
-  const LoadingIcon = currentLoadingStage?.icon || Server;
+  const LoadingIcon = currentLoadingStage?.icon;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] animate-slide-up">
@@ -338,7 +59,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
             <div className="flex flex-col items-center gap-4 py-8">
               <div className="relative">
                 <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
-                  <Server className="w-8 h-8 text-primary animate-pulse" />
+                  <Smartphone className="w-8 h-8 text-primary animate-pulse" />
                 </div>
               </div>
               <p className="text-sm text-muted-foreground">בודק סטטוס חיבור...</p>
@@ -356,7 +77,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
               {errorMessage && (
                 <p className="text-sm text-destructive">{errorMessage}</p>
               )}
-              <Button onClick={createInstance} variant="glow" size="lg" className="gap-2" type="button">
+              <Button onClick={() => createInstance()} variant="glow" size="lg" className="gap-2" type="button">
                 <Plus className="w-5 h-5" />
                 צור חיבור WhatsApp
               </Button>
@@ -377,10 +98,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
               <div className="text-center space-y-2">
                 <h3 className="font-medium text-foreground">יוצר חיבור מאובטח</h3>
                 <p className="text-sm text-muted-foreground">
-                  {creationProgress < 30 && 'מאתחל חיבור...'}
-                  {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
-                  {creationProgress >= 60 && creationProgress < 85 && 'מחבר לשרתים...'}
-                  {creationProgress >= 85 && 'ממתין לאישור...'}
+                  {getCreationProgressMessage(creationProgress)}
                 </p>
               </div>
               <div className="w-full max-w-xs space-y-2">
@@ -392,6 +110,19 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
             </div>
           )}
 
+          {/* Error State */}
+          {status === 'error' && (
+            <div className="flex flex-col items-center gap-6 py-8">
+              <div className="text-center space-y-3">
+                <p className="text-destructive">{errorMessage || 'שגיאה בחיבור'}</p>
+              </div>
+              <Button onClick={() => createInstance()} variant="outline" className="gap-2">
+                <RefreshCw className="w-4 h-4" />
+                נסה שוב
+              </Button>
+            </div>
+          )}
+
           {/* QR Code Display or Waiting for QR */}
           {status === 'waiting_scan' && (
             <div className="flex flex-col items-center gap-4 py-6">
@@ -399,12 +130,12 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                 <QrCode className="w-3 h-3" />
                 {qrCode ? 'ממתין לסריקה' : 'מכין קוד...'}
               </Badge>
-              
+
               {qrCode ? (
                 <>
                   <div className="bg-white p-4 rounded-2xl shadow-lg">
-                    <img 
-                      src={`data:image/png;base64,${qrCode}`} 
+                    <img
+                      src={`data:image/png;base64,${qrCode}`}
                       alt="WhatsApp QR Code"
                       className="w-64 h-64"
                     />
@@ -413,9 +144,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                     <p className="text-sm text-muted-foreground">
                       פתחו את WhatsApp בטלפון → הגדרות → מכשירים מקושרים → קשר מכשיר
                     </p>
-                    <p className="text-xs text-muted-foreground/60">
-                      הקוד מתרענן אוטומטית
-                    </p>
+                    <p className="text-xs text-muted-foreground/60">הקוד מתרענן אוטומטית</p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={fetchQR} className="gap-2">
                     <RefreshCw className="w-4 h-4" />
@@ -424,11 +153,10 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-4">
-                  {/* Beautiful loading animation */}
                   <div className="w-64 h-64 bg-muted/30 rounded-2xl flex flex-col items-center justify-center gap-4 border border-border/50">
                     <div className="relative">
                       <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
-                        <LoadingIcon className="w-8 h-8 text-primary" />
+                        {LoadingIcon && <LoadingIcon className="w-8 h-8 text-primary" />}
                       </div>
                       <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
                         <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -443,9 +171,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                       <Progress value={qrLoadingProgress} className="h-1.5" />
                     </div>
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    ה-QR יופיע בקרוב...
-                  </p>
+                  <p className="text-sm text-muted-foreground">ה-QR יופיע בקרוב...</p>
                 </div>
               )}
             </div>
@@ -459,9 +185,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
               </div>
               <div className="text-center">
                 <h3 className="font-medium text-foreground">WhatsApp מחובר!</h3>
-                <p className="text-sm text-muted-foreground">
-                  מעביר לפרופיל הילד...
-                </p>
+                <p className="text-sm text-muted-foreground">מעביר לפרופיל הילד...</p>
               </div>
             </div>
           )}

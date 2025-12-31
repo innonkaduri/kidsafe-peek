@@ -41,6 +41,7 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
   const [teacherEmail, setTeacherEmail] = useState(child.teacher_email || '');
   const [saving, setSaving] = useState(false);
   const [savingTeacher, setSavingTeacher] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -95,18 +96,15 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
   };
 
   const handleDelete = async () => {
+    setDeleting(true);
     try {
       // First, delete the WhatsApp instance if exists
-      const { data: session } = await supabase.auth.getSession();
-      if (session?.session?.access_token) {
-        try {
-          await supabase.functions.invoke('green-api-partner', {
-            body: { action: 'deleteInstance', child_id: child.id },
-          });
-        } catch (instanceError) {
-          // Ignore instance deletion errors - instance might not exist
-          console.log('Instance deletion skipped or failed:', instanceError);
-        }
+      try {
+        await supabase.functions.invoke('green-api-partner', {
+          body: { action: 'deleteInstance', child_id: child.id },
+        });
+      } catch (instanceError) {
+        console.log('Instance deletion skipped or failed:', instanceError);
       }
 
       // Then delete the child profile
@@ -121,6 +119,7 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
       navigate('/');
     } catch (error: any) {
       toast.error('שגיאה במחיקה: ' + error.message);
+      setDeleting(false);
     }
   };
 
@@ -242,9 +241,9 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
         <CardContent>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="danger">
+              <Button variant="danger" disabled={deleting}>
                 <Trash2 className="w-4 h-4" />
-                מחיקת פרופיל
+                {deleting ? 'מוחק...' : 'מחיקת פרופיל'}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent className="glass-card border-border">
