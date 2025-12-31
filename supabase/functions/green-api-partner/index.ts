@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 interface CreateInstanceRequest {
-  action: "createInstance" | "deleteInstance" | "getStatus";
+  action: "createInstance" | "deleteInstance" | "getStatus" | "fixWebhook";
   child_id: string;
 }
 
@@ -454,6 +454,76 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ status: cred.status, hasInstance: true, error: "state_check_failed" }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } else if (action === "fixWebhook") {
+      // Fix webhook settings to ensure outgoing messages are captured
+      const { data: cred } = await supabase
+        .from("connector_credentials")
+        .select("id, instance_id, api_token, status")
+        .eq("child_id", child_id)
+        .maybeSingle();
+
+      if (!cred || !cred.instance_id || !cred.api_token) {
+        return new Response(
+          JSON.stringify({ error: "No WhatsApp instance found" }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const instanceId = cred.instance_id;
+      const apiToken = cred.api_token;
+      const webhookUrl = `${supabaseUrl}/functions/v1/green-api-webhook?child_id=${child_id}`;
+
+      console.log(`Fixing webhook settings for instance ${instanceId}`);
+
+      try {
+        // Update settings via Green API
+        const settingsResponse = await fetch(
+          `https://api.green-api.com/waInstance${instanceId}/setSettings/${apiToken}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              webhookUrl: webhookUrl,
+              webhookUrlToken: "",
+              incomingWebhook: "yes",
+              outgoingWebhook: "yes",
+              outgoingAPIMessageWebhook: "yes",
+              outgoingMessageWebhook: "yes",
+              stateWebhook: "yes",
+              statusInstanceWebhook: "yes",
+              keepOnlineStatus: "yes",
+            }),
+          }
+        );
+
+        if (!settingsResponse.ok) {
+          const errorText = await settingsResponse.text();
+          console.error("Failed to update settings:", errorText);
+          return new Response(
+            JSON.stringify({ error: "Failed to update webhook settings", details: errorText }),
+            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const settingsResult = await settingsResponse.json();
+        console.log("Webhook settings updated:", settingsResult);
+
+        return new Response(
+          JSON.stringify({ 
+            success: true, 
+            status: "webhook_fixed",
+            settings: settingsResult 
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+
+      } catch (e) {
+        console.error("fixWebhook error:", e);
+        return new Response(
+          JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
     }
