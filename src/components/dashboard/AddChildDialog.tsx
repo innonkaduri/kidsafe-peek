@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, User, CheckCircle, Smartphone, Loader2, QrCode, Wifi, ArrowRight, ArrowLeft, Shield, RefreshCw } from 'lucide-react';
+import { Plus, User, CheckCircle, Smartphone, QrCode, Wifi, ArrowLeft, Shield, RefreshCw, Server, Lock, Zap } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -39,7 +39,18 @@ type ConnectionStatus =
   | 'connected' 
   | 'error';
 
-const CREATION_DURATION_MS = 120000;
+// Polling for instance readiness instead of fixed wait
+const MAX_CREATION_WAIT_MS = 60000;
+const CREATION_POLL_INTERVAL_MS = 3000;
+
+// QR loading stages for visual feedback
+const QR_LOADING_STAGES = [
+  { progress: 10, text: 'מתחבר לשרת...', icon: Server },
+  { progress: 30, text: 'מאמת הרשאות...', icon: Lock },
+  { progress: 50, text: 'מאתחל מופע...', icon: Wifi },
+  { progress: 70, text: 'מכין קוד QR...', icon: QrCode },
+  { progress: 90, text: 'כמעט מוכן...', icon: Zap },
+];
 
 export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
   const { user } = useAuth();
@@ -60,11 +71,14 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
   const [creationProgress, setCreationProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
+  const [qrLoadingProgress, setQrLoadingProgress] = useState(0);
+  const [qrLoadingStage, setQrLoadingStage] = useState(0);
   
   // Refs for intervals
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const creationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const qrLoadingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const clearAllIntervals = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -79,6 +93,32 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
       clearInterval(creationTimerRef.current);
       creationTimerRef.current = null;
     }
+    if (qrLoadingIntervalRef.current) {
+      clearInterval(qrLoadingIntervalRef.current);
+      qrLoadingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startQrLoadingAnimation = useCallback(() => {
+    setQrLoadingProgress(0);
+    setQrLoadingStage(0);
+    
+    let stageIndex = 0;
+    qrLoadingIntervalRef.current = setInterval(() => {
+      if (stageIndex < QR_LOADING_STAGES.length - 1) {
+        stageIndex++;
+        setQrLoadingStage(stageIndex);
+        setQrLoadingProgress(QR_LOADING_STAGES[stageIndex].progress);
+      }
+    }, 800);
+  }, []);
+
+  const stopQrLoadingAnimation = useCallback(() => {
+    if (qrLoadingIntervalRef.current) {
+      clearInterval(qrLoadingIntervalRef.current);
+      qrLoadingIntervalRef.current = null;
+    }
+    setQrLoadingProgress(100);
   }, []);
 
   // Cleanup on unmount or dialog close
@@ -97,6 +137,8 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
     setCreationProgress(0);
     setErrorMessage(null);
     setSyncProgress(0);
+    setQrLoadingProgress(0);
+    setQrLoadingStage(0);
     setDisplayName('');
     setAgeRange('');
     setConsentAck(false);
@@ -156,16 +198,19 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
     }
   };
 
-  // Create WhatsApp instance and show QR
+  // Create WhatsApp instance with active polling instead of fixed wait
   const createWhatsAppInstance = async (childId: string) => {
     setConnectionStatus('creating');
     setErrorMessage(null);
     setCreationProgress(0);
     
     const startTime = Date.now();
+    
+    // Smooth progress animation
     const progressInterval = setInterval(() => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min((elapsed / CREATION_DURATION_MS) * 100, 95);
+      // Progress goes up to 85% during polling, leaves room for final steps
+      const progress = Math.min((elapsed / MAX_CREATION_WAIT_MS) * 85, 85);
       setCreationProgress(progress);
     }, 100);
     creationTimerRef.current = progressInterval;
@@ -188,20 +233,36 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
         return;
       }
 
-      // Wait for visual progress
-      const remainingTime = Math.max(0, CREATION_DURATION_MS - (Date.now() - startTime));
-      if (remainingTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, remainingTime));
+      // Poll for instance readiness instead of fixed 2-minute wait
+      let isReady = false;
+      const pollStartTime = Date.now();
+      
+      while (!isReady && (Date.now() - pollStartTime) < MAX_CREATION_WAIT_MS) {
+        await new Promise(resolve => setTimeout(resolve, CREATION_POLL_INTERVAL_MS));
+        
+        try {
+          const { data: statusData } = await supabase.functions.invoke('green-api-partner', {
+            body: { action: 'getStatus', child_id: childId },
+          });
+          
+          if (statusData?.hasInstance && statusData?.stateInstance) {
+            // Instance exists and has a state - it's ready
+            isReady = true;
+            setCreationProgress(95);
+          }
+        } catch (e) {
+          console.log('Status check during creation:', e);
+        }
       }
       
       clearInterval(progressInterval);
       creationTimerRef.current = null;
       setCreationProgress(100);
       
-      // Wait for instance to be ready
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Start QR loading animation
+      startQrLoadingAnimation();
       
-      // Fetch QR and start polling
+      // Fetch QR immediately and start polling
       await fetchQR(childId);
       
     } catch (error: any) {
@@ -224,10 +285,11 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
       if (error) throw error;
 
       if (data.type === 'qrCode' && data.message) {
+        stopQrLoadingAnimation();
         setQrCode(data.message);
         setConnectionStatus('waiting_scan');
         
-        // Start polling for connection status
+        // Start polling for connection status (faster - every 5 seconds)
         pollIntervalRef.current = setInterval(async () => {
           const connected = await checkConnectionStatus(childId);
           if (connected) {
@@ -236,24 +298,28 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
           }
         }, 5000);
         
-        // Refresh QR every 30 seconds
-        qrRefreshIntervalRef.current = setInterval(() => fetchQR(childId), 30000);
+        // Refresh QR every 15 seconds (faster)
+        qrRefreshIntervalRef.current = setInterval(() => fetchQR(childId), 15000);
         
       } else if (data.type === 'alreadyLogged') {
+        stopQrLoadingAnimation();
         setConnectionStatus('connected');
         setQrCode(null);
         clearAllIntervals();
         await startSyncing(childId);
       } else if (data.type === 'error') {
-        if (!data.rateLimited) {
+        if (!data.rateLimited && !data.notReady && !data.retryable) {
           setErrorMessage(data.message || 'שגיאה בקבלת QR');
           setConnectionStatus('error');
+          stopQrLoadingAnimation();
         }
+        // If rate limited or not ready, keep the loading animation going
       }
     } catch (error: any) {
       console.error('QR fetch error:', error);
       setErrorMessage(error.message || 'שגיאה בחיבור');
       setConnectionStatus('error');
+      stopQrLoadingAnimation();
     }
   };
 
@@ -329,9 +395,14 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
     if (createdChildId) {
       setConnectionStatus('idle');
       setErrorMessage(null);
+      setQrLoadingProgress(0);
+      setQrLoadingStage(0);
       await createWhatsAppInstance(createdChildId);
     }
   };
+
+  const currentLoadingStage = QR_LOADING_STAGES[qrLoadingStage];
+  const LoadingIcon = currentLoadingStage?.icon || Server;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -436,21 +507,23 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
                     <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center animate-pulse">
                       <Shield className="w-10 h-10 text-primary" />
                     </div>
-                    <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
-                      <Loader2 className="w-3 h-3 animate-spin text-primary" />
+                    <div className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                     </div>
                   </div>
                   <div className="text-center space-y-2">
                     <h3 className="font-medium text-foreground">יוצר חיבור מאובטח</h3>
-                    <p className="text-sm text-muted-foreground">מכין את המערכת לקליטת הודעות...</p>
+                    <p className="text-sm text-muted-foreground">
+                      {creationProgress < 30 && 'מאתחל חיבור...'}
+                      {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
+                      {creationProgress >= 60 && creationProgress < 85 && 'מחבר לשרתים...'}
+                      {creationProgress >= 85 && 'ממתין לאישור...'}
+                    </p>
                   </div>
                   <div className="w-full max-w-xs space-y-2">
                     <Progress value={creationProgress} className="h-2" />
                     <p className="text-xs text-muted-foreground/60 text-center">
-                      {creationProgress < 30 && 'מאתחל חיבור...'}
-                      {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
-                      {creationProgress >= 60 && creationProgress < 90 && 'מחבר לשרתים...'}
-                      {creationProgress >= 90 && 'כמעט מוכן...'}
+                      {Math.round(creationProgress)}%
                     </p>
                   </div>
                 </div>
@@ -478,6 +551,33 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
                 </div>
               )}
 
+              {/* QR Loading Animation */}
+              {connectionStatus === 'waiting_scan' && !qrCode && (
+                <div className="flex flex-col items-center gap-4 py-4">
+                  <div className="w-56 h-56 bg-muted/30 rounded-2xl flex flex-col items-center justify-center gap-4 border border-border/50">
+                    <div className="relative">
+                      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                        <LoadingIcon className="w-8 h-8 text-primary" />
+                      </div>
+                      <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                        <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    </div>
+                    <div className="text-center px-4">
+                      <p className="text-sm font-medium text-foreground">
+                        {currentLoadingStage?.text || 'מתחבר...'}
+                      </p>
+                    </div>
+                    <div className="w-40">
+                      <Progress value={qrLoadingProgress} className="h-1.5" />
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    ה-QR יופיע בקרוב...
+                  </p>
+                </div>
+              )}
+
               {/* Connected */}
               {connectionStatus === 'connected' && (
                 <div className="flex flex-col items-center gap-4 py-4">
@@ -494,13 +594,19 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
               {/* Error */}
               {connectionStatus === 'error' && (
                 <div className="flex flex-col items-center gap-4 py-4">
-                  <div className="text-center space-y-4">
-                    <p className="text-sm text-destructive">{errorMessage}</p>
-                    <Button onClick={handleRetry} variant="outline" className="gap-2">
-                      <RefreshCw className="w-4 h-4" />
-                      נסה שוב
-                    </Button>
+                  <div className="w-20 h-20 rounded-full bg-destructive/20 flex items-center justify-center">
+                    <Wifi className="w-10 h-10 text-destructive" />
                   </div>
+                  <div className="text-center space-y-2">
+                    <h3 className="font-medium text-foreground">שגיאה בחיבור</h3>
+                    {errorMessage && (
+                      <p className="text-sm text-destructive">{errorMessage}</p>
+                    )}
+                  </div>
+                  <Button onClick={handleRetry} variant="outline" className="gap-2">
+                    <RefreshCw className="w-4 h-4" />
+                    נסה שוב
+                  </Button>
                 </div>
               )}
             </div>
@@ -512,32 +618,24 @@ export function AddChildDialog({ onChildAdded }: AddChildDialogProps) {
           <>
             <DialogHeader>
               <DialogTitle className="font-heebo text-xl flex items-center gap-2">
-                <Wifi className="w-5 h-5 text-success" />
-                מסנכרן הודעות
+                <Wifi className="w-5 h-5 text-primary animate-pulse" />
+                סנכרון הודעות
               </DialogTitle>
               <DialogDescription className="text-muted-foreground">
-                טוען את ההודעות מחשבון ה-WhatsApp של {displayName}
+                טוען הודעות מ-WhatsApp של {displayName}...
               </DialogDescription>
             </DialogHeader>
 
             <div className="flex flex-col items-center gap-6 py-8">
               <div className="relative">
-                <div className="w-20 h-20 rounded-full bg-success/20 flex items-center justify-center">
-                  <CheckCircle className="w-10 h-10 text-success" />
+                <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center">
+                  <Wifi className="w-10 h-10 text-primary animate-pulse" />
                 </div>
-                {syncProgress < 100 && (
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-success flex items-center justify-center">
-                    <Loader2 className="w-3 h-3 animate-spin text-success" />
-                  </div>
-                )}
               </div>
-              
               <div className="w-full max-w-xs space-y-2">
                 <Progress value={syncProgress} className="h-2" />
-                <p className="text-sm text-muted-foreground text-center">
-                  {syncProgress < 50 && 'מתחבר לשרת...'}
-                  {syncProgress >= 50 && syncProgress < 90 && 'טוען הודעות...'}
-                  {syncProgress >= 90 && 'מסיים...'}
+                <p className="text-xs text-muted-foreground/60 text-center">
+                  {syncProgress < 100 ? 'מסנכרן הודעות...' : 'הסנכרון הושלם!'}
                 </p>
               </div>
             </div>
