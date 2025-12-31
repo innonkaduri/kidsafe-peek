@@ -2,14 +2,38 @@ import { useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 
-const SYNC_INTERVAL_MS = 60000; // Sync every 60 seconds (increased to reduce duplicates)
+const SYNC_INTERVAL_MS = 60000; // Sync every 60 seconds
 const MIN_SYNC_GAP_MS = 30000; // Minimum 30 seconds between syncs
+const AUTO_SCAN_ENABLED = true; // Enable automatic AI scanning
 
 export function useBackgroundSync() {
   const { user } = useAuth();
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isSyncingRef = useRef(false);
   const lastSyncTimeRef = useRef<number>(0);
+
+  // Trigger auto-scan for a child after successful sync
+  const triggerAutoScan = useCallback(async (childId: string) => {
+    if (!AUTO_SCAN_ENABLED) return;
+    
+    try {
+      console.log(`Background sync: Triggering auto-scan for child ${childId}`);
+      const { data, error } = await supabase.functions.invoke('auto-scan', {
+        body: { child_id: childId },
+      });
+      
+      if (error) {
+        console.error(`Background sync: Auto-scan error for child ${childId}:`, error);
+      } else if (data.skipped) {
+        console.log(`Background sync: Auto-scan skipped for child ${childId}: ${data.reason}`);
+      } else if (data.success) {
+        console.log(`Background sync: Auto-scan complete for child ${childId}. Threats: ${data.threat_detected}, Emails: ${data.emails_sent}`);
+      }
+    } catch (err) {
+      console.error(`Background sync: Auto-scan exception for child ${childId}:`, err);
+    }
+  }, []);
+
   const syncAllChildren = useCallback(async () => {
     if (!user || isSyncingRef.current) return;
     
@@ -45,7 +69,7 @@ export function useBackgroundSync() {
       
       const { data: children, error: childError } = await supabase
         .from('children')
-        .select('id')
+        .select('id, monitoring_enabled')
         .eq('user_id', user.id)
         .in('id', childIds);
       
@@ -69,6 +93,11 @@ export function useBackgroundSync() {
             console.error(`Background sync: Error syncing child ${child.id}:`, error);
           } else if (data.messagesImported > 0) {
             console.log(`Background sync: Synced ${data.messagesImported} messages for child ${child.id}`);
+            
+            // Trigger auto-scan after successful sync with new messages
+            if (child.monitoring_enabled !== false) {
+              triggerAutoScan(child.id);
+            }
           }
         } catch (err) {
           console.error(`Background sync: Exception syncing child ${child.id}:`, err);
@@ -79,7 +108,7 @@ export function useBackgroundSync() {
     } finally {
       isSyncingRef.current = false;
     }
-  }, [user]);
+  }, [user, triggerAutoScan]);
 
   useEffect(() => {
     if (!user) {
@@ -105,5 +134,5 @@ export function useBackgroundSync() {
     };
   }, [user, syncAllChildren]);
 
-  return { syncNow: syncAllChildren };
+  return { syncNow: syncAllChildren, triggerAutoScan };
 }
