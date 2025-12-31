@@ -96,6 +96,20 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
 
   const handleDelete = async () => {
     try {
+      // First, delete the WhatsApp instance if exists
+      const { data: session } = await supabase.auth.getSession();
+      if (session?.session?.access_token) {
+        try {
+          await supabase.functions.invoke('green-api-partner', {
+            body: { action: 'deleteInstance', child_id: child.id },
+          });
+        } catch (instanceError) {
+          // Ignore instance deletion errors - instance might not exist
+          console.log('Instance deletion skipped or failed:', instanceError);
+        }
+      }
+
+      // Then delete the child profile
       const { error } = await supabase
         .from('children')
         .delete()
@@ -103,7 +117,7 @@ export function SettingsTab({ child, onUpdate }: SettingsTabProps) {
 
       if (error) throw error;
 
-      toast.success('הפרופיל נמחק');
+      toast.success('הפרופיל והחיבור נמחקו');
       navigate('/');
     } catch (error: any) {
       toast.error('שגיאה במחיקה: ' + error.message);
