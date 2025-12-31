@@ -197,9 +197,30 @@ serve(async (req) => {
 
     if (!analysisResponse.ok) {
       const errorText = await analysisResponse.text();
-      console.error("Auto-scan: AI analysis failed", errorText);
+      console.error("Auto-scan: AI analysis failed", analysisResponse.status, errorText);
       
-      // Update scan status to failed
+      // Handle payment required (402) and rate limit (429) gracefully
+      if (analysisResponse.status === 402 || analysisResponse.status === 429) {
+        const reason = analysisResponse.status === 402 ? "payment_required" : "rate_limited";
+        console.log(`Auto-scan: Skipping due to ${reason}`);
+        
+        // Update scan status to skipped (not failed)
+        await supabase
+          .from("scans")
+          .update({ 
+            status: "skipped", 
+            finished_at: new Date().toISOString(),
+            summary_json: { skipped_reason: reason, error: errorText }
+          })
+          .eq("id", scan.id);
+
+        return new Response(
+          JSON.stringify({ skipped: true, reason, scan_id: scan.id }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Update scan status to failed for other errors
       await supabase
         .from("scans")
         .update({ 
