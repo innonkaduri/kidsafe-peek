@@ -68,11 +68,10 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   }, [child.id]);
 
   // Build the exact prompt that will be sent to AI (same format as analyze-threats)
-  const buildExactPrompt = (messages: any[]): string => {
-    const limitedMessages = messages.slice(-50);
+  const buildExactPrompt = (msgs: any[]): string => {
     const textParts: string[] = [];
 
-    for (const msg of limitedMessages) {
+    for (const msg of msgs) {
       let messageText = "";
 
       if (msg.msg_type === "text") {
@@ -558,7 +557,7 @@ ${userPrompt}`;
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-foreground">יישלחו לניתוח</p>
-                    <p className="text-2xl font-bold text-primary">{Math.min(messagePreview.messagesCount, 50)}</p>
+                    <p className="text-2xl font-bold text-primary">{messagePreview.messagesCount}</p>
                   </div>
                 </div>
                 

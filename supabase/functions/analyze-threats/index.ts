@@ -248,15 +248,14 @@ serve(async (req) => {
       );
     }
 
-    // Limit messages to avoid token overflow - take most recent 50 messages
-    const limitedMessages = messages.slice(-50);
-    console.log(`Processing ${limitedMessages.length} messages (limited from ${messages.length})`);
+    // Process all messages without limit
+    console.log(`Processing all ${messages.length} messages`);
     
     // Log message types breakdown
-    const textMsgs = limitedMessages.filter(m => m.msg_type === 'text').length;
-    const imageMsgs = limitedMessages.filter(m => m.msg_type === 'image').length;
-    const audioMsgs = limitedMessages.filter(m => m.msg_type === 'audio').length;
-    const videoMsgs = limitedMessages.filter(m => m.msg_type === 'video').length;
+    const textMsgs = messages.filter(m => m.msg_type === 'text').length;
+    const imageMsgs = messages.filter(m => m.msg_type === 'image').length;
+    const audioMsgs = messages.filter(m => m.msg_type === 'audio').length;
+    const videoMsgs = messages.filter(m => m.msg_type === 'video').length;
     console.log(`Message types: text=${textMsgs}, image=${imageMsgs}, audio=${audioMsgs}, video=${videoMsgs}`);
 
     // Process media messages - download images as Base64 and transcribe audio/video
@@ -267,13 +266,13 @@ serve(async (req) => {
       videoDescription: string | null;
     }> = new Map();
     
-    const mediaMessages = limitedMessages.filter(
-      (msg) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
+    const mediaMessages = messages.filter(
+      (msg: any) => msg.media_url && ["image", "audio", "video"].includes(msg.msg_type)
     );
 
     console.log(`Processing ${mediaMessages.length} media messages...`);
-    console.log(`Total messages: ${limitedMessages.length}, Messages with media_url: ${mediaMessages.length}`);
-    console.log(`Media types: ${JSON.stringify(mediaMessages.map(m => ({ type: m.msg_type, hasUrl: !!m.media_url, hasThumbnail: !!m.media_thumbnail_url })))}`);
+    console.log(`Total messages: ${messages.length}, Messages with media_url: ${mediaMessages.length}`);
+    console.log(`Media types: ${JSON.stringify(mediaMessages.map((m: any) => ({ type: m.msg_type, hasUrl: !!m.media_url, hasThumbnail: !!m.media_thumbnail_url })))}`);
 
     // Increased limit to 15 images
     let imageCount = 0;
@@ -321,7 +320,7 @@ serve(async (req) => {
     }
 
     // Log skipped images
-    const totalImages = mediaMessages.filter(m => m.msg_type === 'image').length;
+    const totalImages = mediaMessages.filter((m: any) => m.msg_type === 'image').length;
     if (totalImages > imageCount) {
       console.log(`⚠️ Skipped ${totalImages - imageCount} images due to limit (${MAX_IMAGES})`);
     }
@@ -333,7 +332,7 @@ serve(async (req) => {
     const textParts: string[] = [];
     const imageParts: { type: "image_url"; image_url: { url: string; detail: string } }[] = [];
 
-    for (const msg of limitedMessages) {
+    for (const msg of messages) {
       const mediaInfo = mediaDataMap.get(msg.id);
       let messageText = "";
 
