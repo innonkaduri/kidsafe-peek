@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Scan as ScanIcon, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X, Sparkles } from 'lucide-react';
+import { Scan as ScanIcon, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X, Sparkles, Calendar } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Child } from '@/types/database';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+
+type ScanTimeRange = 'since_last_scan' | 'all' | 'last_week' | 'last_month';
 
 interface ScanTabProps {
   child: Child;
@@ -71,8 +74,23 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     findingsCount: number;
     alertsCount: number;
   } | null>(null);
+  const [scanTimeRange, setScanTimeRange] = useState<ScanTimeRange>('since_last_scan');
 
-  // Fetch last scan date
+  // Helper function to get date filter based on time range
+  const getDateFilter = (): string | null => {
+    const now = new Date();
+    switch (scanTimeRange) {
+      case 'since_last_scan':
+        return lastScanAt;
+      case 'last_week':
+        return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      case 'last_month':
+        return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      case 'all':
+      default:
+        return null;
+    }
+  };
   useEffect(() => {
     const fetchLastScan = async () => {
       const { data } = await supabase
@@ -157,8 +175,9 @@ ${msgs.length > 20 ? `\n... ועוד ${msgs.length - 20} הודעות` : ''}
         .eq('child_id', child.id)
         .order('message_timestamp', { ascending: true });
 
-      if (lastScanAt) {
-        query = query.gt('message_timestamp', lastScanAt);
+      const dateFilter = getDateFilter();
+      if (dateFilter) {
+        query = query.gt('message_timestamp', dateFilter);
       }
 
       const { data: messages, error: messagesError } = await query;
@@ -279,8 +298,9 @@ ${msgs.length > 20 ? `\n... ועוד ${msgs.length - 20} הודעות` : ''}
         .eq('child_id', child.id)
         .order('message_timestamp', { ascending: true });
 
-      if (lastScanAt) {
-        query = query.gt('message_timestamp', lastScanAt);
+      const dateFilter = getDateFilter();
+      if (dateFilter) {
+        query = query.gt('message_timestamp', dateFilter);
       }
 
       const { data: messages, error: messagesError } = await query;
@@ -516,16 +536,28 @@ ${msgs.length > 20 ? `\n... ועוד ${msgs.length - 20} הודעות` : ''}
         <CardContent className="space-y-6">
           {!scanning && !result && !messagePreview && (
             <>
-              <div className="glass-card p-4 rounded-xl space-y-2">
+              <div className="glass-card p-4 rounded-xl space-y-3">
                 <p className="text-sm text-muted-foreground">
                   <strong className="text-foreground">ניתוח AI:</strong> הסריקה משתמשת ב-AI לזיהוי סיכונים חמורים בלבד כמו חרם, איומים, הטרדה מינית, ופגיעה עצמית.
                 </p>
-                <p className="text-sm text-muted-foreground">
-                  <strong className="text-foreground">טווח סריקה:</strong>{' '}
-                  {lastScanAt 
-                    ? `הודעות מאז ${new Date(lastScanAt).toLocaleString('he-IL')}`
-                    : 'כל ההודעות (סריקה ראשונה)'}
-                </p>
+                
+                <div className="flex items-center gap-3">
+                  <Calendar className="w-4 h-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">טווח סריקה:</Label>
+                  <Select value={scanTimeRange} onValueChange={(v) => setScanTimeRange(v as ScanTimeRange)}>
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="since_last_scan">
+                        {lastScanAt ? `מאז ${new Date(lastScanAt).toLocaleDateString('he-IL')}` : 'כל ההודעות'}
+                      </SelectItem>
+                      <SelectItem value="all">כל ההודעות</SelectItem>
+                      <SelectItem value="last_week">שבוע אחרון</SelectItem>
+                      <SelectItem value="last_month">חודש אחרון</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
               <div className="flex gap-3">

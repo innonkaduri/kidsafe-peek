@@ -233,34 +233,65 @@ serve(async (req) => {
       webhookData.senderData.senderName || 
       webhookData.senderData.chatName
     );
-    const chatId = webhookData.senderData.chatId;
+    const externalChatId = webhookData.senderData.chatId; // Green API's unique chat ID
 
-    // Find or create chat
-    let { data: chat } = await supabase
+    // Find or create chat by external_chat_id (more reliable than chat_name)
+    let chatResult = await supabase
       .from("chats")
-      .select("id")
+      .select("id, chat_name")
       .eq("child_id", childId)
-      .eq("chat_name", chatName)
+      .eq("external_chat_id", externalChatId)
       .maybeSingle();
 
-    if (!chat) {
-      const { data: newChat, error: newChatError } = await supabase
-        .from("chats")
-        .insert({
-          child_id: childId,
-          chat_name: chatName,
-          participant_count: 2,
-          is_group: chatId.includes("@g.us"),
-          last_message_at: new Date(webhookData.timestamp * 1000).toISOString(),
-        })
-        .select("id")
-        .single();
+    let chatId: string;
 
-      if (newChatError) {
-        console.error("Error creating chat:", newChatError);
-        throw newChatError;
+    if (chatResult.data) {
+      chatId = chatResult.data.id;
+      // Update chat_name if it changed
+      if (chatResult.data.chat_name !== chatName) {
+        await supabase
+          .from("chats")
+          .update({ chat_name: chatName })
+          .eq("id", chatId);
       }
-      chat = newChat;
+    } else {
+      // Fallback: check if chat exists by chat_name (for backward compatibility)
+      const { data: legacyChat } = await supabase
+        .from("chats")
+        .select("id")
+        .eq("child_id", childId)
+        .eq("chat_name", chatName)
+        .is("external_chat_id", null)
+        .maybeSingle();
+
+      if (legacyChat) {
+        // Update with external_chat_id
+        chatId = legacyChat.id;
+        await supabase
+          .from("chats")
+          .update({ external_chat_id: externalChatId })
+          .eq("id", chatId);
+      } else {
+        // Create new chat with external_chat_id
+        const { data: newChat, error: newChatError } = await supabase
+          .from("chats")
+          .insert({
+            child_id: childId,
+            chat_name: chatName,
+            external_chat_id: externalChatId,
+            participant_count: 2,
+            is_group: externalChatId.includes("@g.us"),
+            last_message_at: new Date(webhookData.timestamp * 1000).toISOString(),
+          })
+          .select("id")
+          .single();
+
+        if (newChatError || !newChat) {
+          console.error("Error creating chat:", newChatError);
+          throw newChatError || new Error("Failed to create chat");
+        }
+        chatId = newChat.id;
+      }
     }
 
     // Determine message type, content, and media URLs
@@ -382,7 +413,7 @@ serve(async (req) => {
 
     const payload = {
       child_id: childId,
-      chat_id: chat.id,
+      chat_id: chatId,
       sender_label: isChildSender ? "אני" : senderLabel,
       is_child_sender: isChildSender,
       msg_type: msgType,
@@ -452,7 +483,7 @@ serve(async (req) => {
     await supabase
       .from("chats")
       .update({ last_message_at: new Date(webhookData.timestamp * 1000).toISOString() })
-      .eq("id", chat.id);
+      .eq("id", chatId);
 
     console.log("Message saved for child:", childId, "- isChildSender:", isChildSender);
 

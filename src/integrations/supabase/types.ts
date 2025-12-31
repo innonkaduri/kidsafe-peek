@@ -55,6 +55,7 @@ export type Database = {
           chat_name: string
           child_id: string
           created_at: string | null
+          external_chat_id: string | null
           id: string
           import_id: string | null
           is_group: boolean | null
@@ -66,6 +67,7 @@ export type Database = {
           chat_name: string
           child_id: string
           created_at?: string | null
+          external_chat_id?: string | null
           id?: string
           import_id?: string | null
           is_group?: boolean | null
@@ -77,6 +79,7 @@ export type Database = {
           chat_name?: string
           child_id?: string
           created_at?: string | null
+          external_chat_id?: string | null
           id?: string
           import_id?: string | null
           is_group?: boolean | null
