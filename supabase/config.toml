@@ -41,3 +41,6 @@ verify_jwt = false
 
 [functions.send-teacher-feedback-email]
 verify_jwt = false
+
+[functions.analyze-threats-lovable]
+verify_jwt = false

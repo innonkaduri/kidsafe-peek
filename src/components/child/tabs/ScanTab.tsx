@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Scan as ScanIcon, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X } from 'lucide-react';
+import { Scan as ScanIcon, Loader2, CheckCircle, AlertTriangle, Zap, Eye, X, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,10 +24,22 @@ interface MessagePreview {
   oldestMessageAt: string | null;
   newestMessageAt: string | null;
   exactPrompt: string;
+  rawMessages: any[];
+}
+
+interface LovableAIResult {
+  success: boolean;
+  model: string;
+  provider: string;
+  messages_analyzed: number;
+  media_summary: { images: number; audio: number; video: number };
+  result: any;
 }
 
 export function ScanTab({ child, onScanComplete }: ScanTabProps) {
   const [scanning, setScanning] = useState(false);
+  const [testingLovable, setTestingLovable] = useState(false);
+  const [lovableResult, setLovableResult] = useState<LovableAIResult | null>(null);
   const [progress, setProgress] = useState(0);
   const [lastScanAt, setLastScanAt] = useState<string | null>(null);
   const [messagePreview, setMessagePreview] = useState<MessagePreview | null>(null);
@@ -179,10 +191,57 @@ ${userPrompt}`;
         oldestMessageAt: allMessages[0]?.message_timestamp ?? null,
         newestMessageAt: allMessages[allMessages.length - 1]?.message_timestamp ?? null,
         exactPrompt,
+        rawMessages: allMessages,
       });
     } catch (error: any) {
       console.error('Error fetching messages preview:', error);
       toast.error('שגיאה בטעינת ההודעות: ' + error.message);
+    }
+  };
+
+  // Test with Lovable AI (Gemini)
+  const testWithLovableAI = async () => {
+    if (!messagePreview) return;
+
+    setTestingLovable(true);
+    setLovableResult(null);
+
+    try {
+      // Format messages for the edge function
+      const formattedMessages = messagePreview.rawMessages.map((msg: any) => ({
+        id: msg.id,
+        sender_label: msg.sender_label,
+        is_child_sender: msg.is_child_sender,
+        msg_type: msg.msg_type,
+        message_timestamp: msg.message_timestamp,
+        text_content: msg.text_content,
+        media_url: msg.media_url,
+        chat_name: msg.chats?.chat_name,
+      }));
+
+      console.log('[ScanTab] Testing with Lovable AI, messages:', formattedMessages.length);
+
+      const { data, error } = await supabase.functions.invoke('analyze-threats-lovable', {
+        body: {
+          child_id: child.id,
+          messages: formattedMessages,
+          child_context: `שם: ${child.display_name}, גיל: ${child.age_range || 'לא ידוע'}`,
+        },
+      });
+
+      if (error) {
+        console.error('[ScanTab] Lovable AI error:', error);
+        throw error;
+      }
+
+      console.log('[ScanTab] Lovable AI result:', data);
+      setLovableResult(data);
+      toast.success('הבדיקה עם Lovable AI הושלמה');
+    } catch (error: any) {
+      console.error('[ScanTab] Lovable AI test failed:', error);
+      toast.error('שגיאה בבדיקה עם Lovable AI: ' + error.message);
+    } finally {
+      setTestingLovable(false);
     }
   };
 
@@ -542,13 +601,70 @@ ${userPrompt}`;
                 </p>
               </div>
 
+              {/* Test with Lovable AI button */}
+              <div className="border-t pt-4">
+                <Button 
+                  onClick={testWithLovableAI} 
+                  variant="outline" 
+                  size="lg" 
+                  className="w-full bg-gradient-to-r from-purple-500/10 to-pink-500/10 border-purple-500/30 hover:border-purple-500/50"
+                  disabled={testingLovable}
+                >
+                  {testingLovable ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      בודק עם Lovable AI...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5 text-purple-500" />
+                      בדוק עם Lovable AI (Gemini)
+                    </>
+                  )}
+                </Button>
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  שולח את ההודעות + תמונות + אודיו + וידאו ל-Gemini לניתוח
+                </p>
+              </div>
+
+              {/* Lovable AI Result */}
+              {lovableResult && (
+                <div className="space-y-3 border-t pt-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-heebo font-bold text-md flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-purple-500" />
+                      תוצאת Lovable AI
+                    </h4>
+                    <Badge variant="secondary">{lovableResult.model}</Badge>
+                  </div>
+                  
+                  <div className="glass-card p-3 rounded-lg space-y-2 text-sm">
+                    <div className="flex gap-4 text-muted-foreground">
+                      <span>📊 הודעות: {lovableResult.messages_analyzed}</span>
+                      <span>🖼️ תמונות: {lovableResult.media_summary?.images || 0}</span>
+                      <span>🎤 אודיו: {lovableResult.media_summary?.audio || 0}</span>
+                      <span>🎬 וידאו: {lovableResult.media_summary?.video || 0}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="font-bold">תשובת ה-AI:</Label>
+                    <ScrollArea className="h-[300px] border rounded-lg p-3 bg-muted/30">
+                      <pre className="text-xs whitespace-pre-wrap font-mono text-foreground" dir="rtl">
+                        {JSON.stringify(lovableResult.result, null, 2)}
+                      </pre>
+                    </ScrollArea>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3">
-                <Button onClick={() => setMessagePreview(null)} variant="outline" size="lg" className="flex-1">
+                <Button onClick={() => { setMessagePreview(null); setLovableResult(null); }} variant="outline" size="lg" className="flex-1">
                   חזרה
                 </Button>
                 <Button onClick={startScan} variant="glow" size="lg" className="flex-1">
                   <Zap className="w-5 h-5" />
-                  התחל סריקה
+                  התחל סריקה (OpenAI)
                 </Button>
               </div>
             </div>
