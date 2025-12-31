@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Smartphone, Loader2, Shield, Plus, RefreshCw, QrCode, CheckCircle } from 'lucide-react';
+import { Smartphone, Shield, Plus, RefreshCw, QrCode, CheckCircle, Wifi, Server, Lock, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,17 +20,31 @@ type ConnectionStatus =
   | 'waiting_scan' 
   | 'connected';
 
-const CREATION_DURATION_MS = 120000;
+// Polling for instance readiness instead of fixed wait
+const MAX_CREATION_WAIT_MS = 60000;
+const CREATION_POLL_INTERVAL_MS = 3000;
+
+// QR loading stages for visual feedback
+const QR_LOADING_STAGES = [
+  { progress: 10, text: 'מתחבר לשרת...', icon: Server },
+  { progress: 30, text: 'מאמת הרשאות...', icon: Lock },
+  { progress: 50, text: 'מאתחל מופע...', icon: Wifi },
+  { progress: 70, text: 'מכין קוד QR...', icon: QrCode },
+  { progress: 90, text: 'כמעט מוכן...', icon: Zap },
+];
 
 export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboardingScreenProps) {
   const [status, setStatus] = useState<ConnectionStatus>('loading');
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [creationProgress, setCreationProgress] = useState(0);
+  const [qrLoadingProgress, setQrLoadingProgress] = useState(0);
+  const [qrLoadingStage, setQrLoadingStage] = useState(0);
   
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const qrRefreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const creationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const qrLoadingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isInitializedRef = useRef(false);
   const isFetchingRef = useRef(false);
 
@@ -47,6 +61,32 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       clearInterval(creationTimerRef.current);
       creationTimerRef.current = null;
     }
+    if (qrLoadingIntervalRef.current) {
+      clearInterval(qrLoadingIntervalRef.current);
+      qrLoadingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startQrLoadingAnimation = useCallback(() => {
+    setQrLoadingProgress(0);
+    setQrLoadingStage(0);
+    
+    let stageIndex = 0;
+    qrLoadingIntervalRef.current = setInterval(() => {
+      if (stageIndex < QR_LOADING_STAGES.length - 1) {
+        stageIndex++;
+        setQrLoadingStage(stageIndex);
+        setQrLoadingProgress(QR_LOADING_STAGES[stageIndex].progress);
+      }
+    }, 800);
+  }, []);
+
+  const stopQrLoadingAnimation = useCallback(() => {
+    if (qrLoadingIntervalRef.current) {
+      clearInterval(qrLoadingIntervalRef.current);
+      qrLoadingIntervalRef.current = null;
+    }
+    setQrLoadingProgress(100);
   }, []);
 
   const checkInstanceStatus = useCallback(async () => {
@@ -100,6 +140,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       if (data.type === 'noInstance') {
         setStatus('no_instance');
         clearIntervals();
+        stopQrLoadingAnimation();
         return;
       }
 
@@ -116,9 +157,11 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       }
 
       if (data.type === 'qrCode' && data.message) {
+        stopQrLoadingAnimation();
         setQrCode(data.message);
         setStatus('waiting_scan');
       } else if (data.type === 'alreadyLogged') {
+        stopQrLoadingAnimation();
         setStatus('connected');
         setQrCode(null);
         clearIntervals();
@@ -130,7 +173,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
     } finally {
       isFetchingRef.current = false;
     }
-  }, [child.id, clearIntervals, onConnected]);
+  }, [child.id, clearIntervals, onConnected, stopQrLoadingAnimation]);
 
   // Initialize once on mount
   useEffect(() => {
@@ -151,17 +194,20 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
         if (data?.hasInstance) {
           setStatus('waiting_scan');
           
-          // Fetch QR after delay
-          setTimeout(fetchQR, 2000);
+          // Start loading animation immediately
+          startQrLoadingAnimation();
           
-          // Poll for status every 15 seconds
+          // Fetch QR immediately - no delay
+          fetchQR();
+          
+          // Poll for status every 8 seconds (faster)
           pollIntervalRef.current = setInterval(async () => {
             const connected = await checkInstanceStatus();
             if (connected) clearIntervals();
-          }, 15000);
+          }, 8000);
           
-          // Refresh QR every 20 seconds
-          qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
+          // Refresh QR every 15 seconds (faster)
+          qrRefreshIntervalRef.current = setInterval(fetchQR, 15000);
         } else {
           setStatus('no_instance');
         }
@@ -171,7 +217,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
     initialize();
     
     return () => clearIntervals();
-  }, [child.id, checkInstanceStatus, fetchQR, clearIntervals]);
+  }, [child.id, checkInstanceStatus, fetchQR, clearIntervals, startQrLoadingAnimation]);
 
   const createInstance = async (e?: React.MouseEvent) => {
     e?.preventDefault();
@@ -182,9 +228,12 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
     setCreationProgress(0);
     
     const startTime = Date.now();
+    
+    // Smooth progress animation
     const progressInterval = setInterval(() => {
       const elapsed = Date.now() - startTime;
-      const progress = Math.min((elapsed / CREATION_DURATION_MS) * 100, 95);
+      // Progress goes up to 85% during polling, leaves room for final steps
+      const progress = Math.min((elapsed / MAX_CREATION_WAIT_MS) * 85, 85);
       setCreationProgress(progress);
     }, 100);
     creationTimerRef.current = progressInterval;
@@ -209,9 +258,26 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
         return;
       }
 
-      const remainingTime = Math.max(0, CREATION_DURATION_MS - (Date.now() - startTime));
-      if (remainingTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, remainingTime));
+      // Poll for instance readiness instead of fixed wait
+      let isReady = false;
+      const pollStartTime = Date.now();
+      
+      while (!isReady && (Date.now() - pollStartTime) < MAX_CREATION_WAIT_MS) {
+        await new Promise(resolve => setTimeout(resolve, CREATION_POLL_INTERVAL_MS));
+        
+        try {
+          const { data: statusData } = await supabase.functions.invoke('green-api-partner', {
+            body: { action: 'getStatus', child_id: child.id },
+          });
+          
+          if (statusData?.hasInstance && statusData?.stateInstance) {
+            // Instance exists and has a state - it's ready
+            isReady = true;
+            setCreationProgress(95);
+          }
+        } catch (e) {
+          console.log('Status check during creation:', e);
+        }
       }
       
       clearInterval(progressInterval);
@@ -223,19 +289,19 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       // Start waiting for QR
       setStatus('waiting_scan');
       
-      // Wait and then start polling
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Start loading animation
+      startQrLoadingAnimation();
       
-      // Start fetching QR
+      // Start fetching QR immediately
       fetchQR();
       
-      // Set up polling intervals
+      // Set up polling intervals (faster)
       pollIntervalRef.current = setInterval(async () => {
         const connected = await checkInstanceStatus();
         if (connected) clearIntervals();
-      }, 15000);
+      }, 8000);
       
-      qrRefreshIntervalRef.current = setInterval(fetchQR, 20000);
+      qrRefreshIntervalRef.current = setInterval(fetchQR, 15000);
       
     } catch (error: any) {
       clearInterval(progressInterval);
@@ -246,6 +312,9 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
       toast.error('שגיאה ביצירת חיבור: ' + error.message);
     }
   };
+
+  const currentLoadingStage = QR_LOADING_STAGES[qrLoadingStage];
+  const LoadingIcon = currentLoadingStage?.icon || Server;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] animate-slide-up">
@@ -267,7 +336,11 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
           {/* Loading State */}
           {status === 'loading' && (
             <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="w-12 h-12 animate-spin text-primary" />
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                  <Server className="w-8 h-8 text-primary animate-pulse" />
+                </div>
+              </div>
               <p className="text-sm text-muted-foreground">בודק סטטוס חיבור...</p>
             </div>
           )}
@@ -297,23 +370,23 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                 <div className="w-20 h-20 rounded-full bg-primary/20 flex items-center justify-center animate-pulse">
                   <Shield className="w-10 h-10 text-primary" />
                 </div>
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
-                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
+                <div className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                 </div>
               </div>
               <div className="text-center space-y-2">
                 <h3 className="font-medium text-foreground">יוצר חיבור מאובטח</h3>
                 <p className="text-sm text-muted-foreground">
-                  מכין את המערכת לקליטת הודעות...
+                  {creationProgress < 30 && 'מאתחל חיבור...'}
+                  {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
+                  {creationProgress >= 60 && creationProgress < 85 && 'מחבר לשרתים...'}
+                  {creationProgress >= 85 && 'ממתין לאישור...'}
                 </p>
               </div>
               <div className="w-full max-w-xs space-y-2">
                 <Progress value={creationProgress} className="h-2" />
                 <p className="text-xs text-muted-foreground/60 text-center">
-                  {creationProgress < 30 && 'מאתחל חיבור...'}
-                  {creationProgress >= 30 && creationProgress < 60 && 'מגדיר הצפנה...'}
-                  {creationProgress >= 60 && creationProgress < 90 && 'מחבר לשרתים...'}
-                  {creationProgress >= 90 && 'כמעט מוכן...'}
+                  {Math.round(creationProgress)}%
                 </p>
               </div>
             </div>
@@ -324,7 +397,7 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
             <div className="flex flex-col items-center gap-4 py-6">
               <Badge variant="outline" className="gap-1 border-primary/50 text-primary mb-2">
                 <QrCode className="w-3 h-3" />
-                {qrCode ? 'ממתין לסריקה' : 'מאתחל מופע...'}
+                {qrCode ? 'ממתין לסריקה' : 'מכין קוד...'}
               </Badge>
               
               {qrCode ? (
@@ -351,11 +424,27 @@ export function WhatsAppOnboardingScreen({ child, onConnected }: WhatsAppOnboard
                 </>
               ) : (
                 <div className="flex flex-col items-center gap-4">
-                  <div className="w-64 h-64 bg-muted/30 rounded-2xl flex items-center justify-center">
-                    <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                  {/* Beautiful loading animation */}
+                  <div className="w-64 h-64 bg-muted/30 rounded-2xl flex flex-col items-center justify-center gap-4 border border-border/50">
+                    <div className="relative">
+                      <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
+                        <LoadingIcon className="w-8 h-8 text-primary" />
+                      </div>
+                      <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                        <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    </div>
+                    <div className="text-center px-4">
+                      <p className="text-sm font-medium text-foreground">
+                        {currentLoadingStage?.text || 'מתחבר...'}
+                      </p>
+                    </div>
+                    <div className="w-40">
+                      <Progress value={qrLoadingProgress} className="h-1.5" />
+                    </div>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    המופע מאותחל, ה-QR יופיע בקרוב...
+                    ה-QR יופיע בקרוב...
                   </p>
                 </div>
               )}
