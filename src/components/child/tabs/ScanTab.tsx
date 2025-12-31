@@ -27,13 +27,35 @@ interface MessagePreview {
   rawMessages: any[];
 }
 
+// New Gemini 3 response format
+interface GeminiAlert {
+  chatId: string;
+  chatName: string;
+  type: string;
+  risk_score: number;
+  confidence: number;
+  summary: string;
+  triggers: Array<{
+    messageId: string;
+    modality: 'text' | 'image' | 'audio' | 'video';
+    preview: string;
+    confidence: number;
+  }>;
+  childIsTarget: boolean;
+  childIsAggressor: boolean;
+}
+
 interface LovableAIResult {
   success: boolean;
   model: string;
   provider: string;
   messages_analyzed: number;
-  media_summary: { images: number; audio: number; video: number };
-  result: any;
+  images_analyzed?: number;
+  threatDetected: boolean;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical' | null;
+  threatTypes: string[];
+  alerts: GeminiAlert[];
+  explanation: string;
 }
 
 export function ScanTab({ child, onScanComplete }: ScanTabProps) {
@@ -47,7 +69,7 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
     threatDetected: boolean;
     riskLevel: string | null;
     findingsCount: number;
-    patternsCount: number;
+    alertsCount: number;
   } | null>(null);
 
   // Fetch last scan date
@@ -104,43 +126,16 @@ export function ScanTab({ child, onScanComplete }: ScanTabProps) {
       }
     }
 
-    const systemInstructions = `אתה מערכת AI לזיהוי סיכונים חמורים לילדים מתוך שיחות.
+    // Just show a summary of messages for preview
+    return `=== תקציר הודעות לניתוח ===
 
-המטרה שלך:
-לאתר **אך ורק** מצבים מסוכנים באמת, שעלולים לגרום לפגיעה ממשית בילד/ה.
+סה"כ הודעות: ${msgs.length}
 
-❗ חשוב מאוד:
-אל תסמן איום אם אין סיכון ברור, חד-משמעי ומגובה בהקשר.
-עדיף לפספס מקרה גבולי מאשר להתריע על שטויות.
+${textParts.slice(0, 20).join("\n")}
+${msgs.length > 20 ? `\n... ועוד ${msgs.length - 20} הודעות` : ''}
 
-סוגי סיכון שמותר לזהות:
-- חרם, השפלה מתמשכת או אלימות רגשית קשה
-- איומים פיזיים מפורשים
-- אלימות מינית, הטרדה מינית או פנייה מינית לקטין
-- סמים, אלכוהול או שידול לשימוש
-- פגיעה עצמית או עידוד לפגיעה עצמית
-- סחיטה, איום או מניפולציה מסוכנת
-
-❌ אסור להתריע על:
-- שיח יומיומי, בדיחות, קללות קלות
-- פוליטיקה, חדשות, דעות
-- ויכוחים רגילים
-- שפה בוטה בלי איום ממשי
-- תוכן לא נעים אך לא מסוכן
-
-בנוסף, בדוק היטב את התמונות המצורפות - חפש תוכן לא הולם, סימני סיכון, או כל דבר חשוד.`;
-
-    const userPrompt = `הודעות לניתוח:
-
-${textParts.join("\n")}
-
-נא לנתח ולהחזיר תשובה בפורמט JSON.`;
-
-    return `=== SYSTEM PROMPT ===
-${systemInstructions}
-
-=== USER PROMPT ===
-${userPrompt}`;
+=== הערה ===
+הפרומפט המלא יישלח ל-Gemini 3 Pro עם ההוראות המפורטות לזיהוי סיכונים ממשיים בלבד.`;
   };
 
   // Fetch messages and build exact prompt preview
@@ -311,22 +306,22 @@ ${userPrompt}`;
 
       setProgress(40);
 
-      // Call AI analysis edge function
-      console.log('[ScanTab] Invoking analyze-threats edge function...');
+      // Call Gemini 3 Pro analysis edge function
+      console.log('[ScanTab] Invoking analyze-threats-lovable (Gemini 3 Pro)...');
       let analysisData: any;
       let analysisError: any;
       
       try {
-        const result = await supabase.functions.invoke('analyze-threats', {
+        const result = await supabase.functions.invoke('analyze-threats-lovable', {
           body: {
             child_id: child.id,
-            scan_id: scan.id,
             messages: formattedMessages,
+            child_context: `שם: ${child.display_name}, גיל: ${child.age_range || 'לא ידוע'}`,
           },
         });
         analysisData = result.data;
         analysisError = result.error;
-        console.log('[ScanTab] Edge function response received:', { hasData: !!analysisData, hasError: !!analysisError });
+        console.log('[ScanTab] Gemini 3 Pro response received:', { hasData: !!analysisData, hasError: !!analysisError });
       } catch (invokeError: any) {
         console.error('[ScanTab] Edge function invoke failed:', invokeError);
         // Update scan to failed status
@@ -361,39 +356,45 @@ ${userPrompt}`;
 
       setProgress(80);
 
-      const aiResult = analysisData;
-      console.log('[ScanTab] AI analysis result:', aiResult);
+      const aiResult = analysisData as LovableAIResult;
+      console.log('[ScanTab] Gemini 3 Pro result:', {
+        threatDetected: aiResult.threatDetected,
+        riskLevel: aiResult.riskLevel,
+        alertsCount: aiResult.alerts?.length || 0,
+      });
 
       // Handle rate limiting or payment errors from the edge function response
-      if (aiResult?.error) {
-        console.error('[ScanTab] AI result contains error:', aiResult.error);
+      if ((aiResult as any)?.error) {
+        console.error('[ScanTab] AI result contains error:', (aiResult as any).error);
         // Update scan to failed status
         await supabase.from('scans').update({
           status: 'failed',
           finished_at: new Date().toISOString(),
-          summary_json: { error: aiResult.error },
+          summary_json: { error: (aiResult as any).error },
         }).eq('id', scan.id);
-        throw new Error(aiResult.error);
+        throw new Error((aiResult as any).error);
       }
 
       // Create finding - save even when no threats for record keeping
       if (scan) {
-        const { data: findingData, error: findingError } = await supabase.from('findings').insert({
+        const findingInsert = {
           scan_id: scan.id,
           child_id: child.id,
           threat_detected: aiResult.threatDetected || false,
           risk_level: aiResult.riskLevel || null,
           threat_types: aiResult.threatTypes || [],
           explanation: aiResult.explanation || 'לא זוהו סיכונים',
-          ai_response_encrypted: aiResult, // Store full AI response
-        }).select('id').single();
+          ai_response_encrypted: aiResult as any, // Store full AI response including alerts
+        };
+        
+        const { error: findingError } = await supabase.from('findings').insert(findingInsert);
 
         if (findingError) {
           console.error('Error saving finding:', findingError);
         }
 
-        // Send email alert to parent if threat detected
-        if (aiResult.threatDetected && aiResult.riskLevel) {
+        // Send email alert to parent for each high-confidence alert
+        if (aiResult.threatDetected && aiResult.riskLevel && aiResult.alerts?.length > 0) {
           try {
             const { data: session } = await supabase.auth.getSession();
             const { data: profile } = await supabase
@@ -403,23 +404,44 @@ ${userPrompt}`;
               .single();
 
             if (profile?.email) {
+              // Build alert details for email
+              const alertSummaries = aiResult.alerts.map((alert: GeminiAlert) => {
+                const typeLabels: Record<string, string> = {
+                  'bullying_ostracism': 'חרם/בריונות',
+                  'sexual_violence_or_exploitation': 'ניצול מיני',
+                  'drugs_or_alcohol': 'סמים/אלכוהול',
+                  'threats_or_violence': 'איומים/אלימות',
+                  'hate_speech': 'גזענות/שנאה',
+                };
+                return `${typeLabels[alert.type] || alert.type}: ${alert.summary}`;
+              }).join('\n');
+
+              const triggersPreview = aiResult.alerts
+                .flatMap((a: GeminiAlert) => a.triggers?.slice(0, 2) || [])
+                .map((t: any) => `"${t.preview?.slice(0, 100)}..."`)
+                .slice(0, 5)
+                .join('\n');
+
+              // Build recommendations based on alert types
+              const recommendations = aiResult.alerts.map((alert: GeminiAlert) => {
+                const recs: Record<string, string> = {
+                  'bullying_ostracism': 'שוחחו עם הילד על מה שקורה ופנו לצוות החינוכי',
+                  'sexual_violence_or_exploitation': 'פנו מיד לגורם מקצועי ושקלו דיווח לרשויות',
+                  'drugs_or_alcohol': 'שוחחו עם הילד ופנו לייעוץ מקצועי',
+                  'threats_or_violence': 'תעדו ודווחו לרשויות המתאימות',
+                  'hate_speech': 'שוחחו עם הילד על ערכי סובלנות וכבוד',
+                };
+                return recs[alert.type] || `בדקו את הנושא: ${alert.type}`;
+              });
+
               await supabase.functions.invoke('send-alert-email', {
                 body: {
                   to: profile.email,
                   child_name: child.display_name,
                   risk_level: aiResult.riskLevel,
-                  summary: aiResult.explanation || 'זוהתה התראה שמחייבת תשומת לב',
-                  recommendations: aiResult.threatTypes?.map((type: string) => {
-                    const recommendations: Record<string, string> = {
-                      'חרם': 'שוחחו עם הילד על מה שקורה בבית הספר ופנו לצוות החינוכי',
-                      'בריונות': 'תעדו את האירועים ופנו להנהלת בית הספר',
-                      'תוכן מיני': 'שוחחו עם הילד בזהירות ושקלו פנייה לגורם מקצועי',
-                      'סחיטה': 'דווחו לרשויות ואל תיענו לדרישות הסוחט',
-                      'אלימות': 'תעדו ודווחו לרשויות המתאימות',
-                      'סמים': 'שוחחו עם הילד ופנו לייעוץ מקצועי',
-                    };
-                    return recommendations[type] || `בדקו את הנושא: ${type}`;
-                  })
+                  summary: `${aiResult.explanation}\n\nפירוט התראות:\n${alertSummaries}`,
+                  original_message: triggersPreview || undefined,
+                  recommendations: recommendations,
                 }
               });
               console.log('Alert email sent to parent');
@@ -427,27 +449,6 @@ ${userPrompt}`;
           } catch (emailError) {
             console.error('Error sending alert email:', emailError);
             // Don't fail the scan if email fails
-          }
-        }
-
-        // Create patterns
-        for (const pattern of aiResult.patterns || []) {
-          // Find the chat by name
-          const { data: chatData } = await supabase
-            .from('chats')
-            .select('id')
-            .eq('child_id', child.id)
-            .limit(1)
-            .maybeSingle();
-
-          if (chatData) {
-            await supabase.from('patterns').insert({
-              scan_id: scan.id,
-              chat_id: chatData.id,
-              pattern_type: pattern.patternType,
-              description: pattern.description,
-              confidence: pattern.confidence,
-            });
           }
         }
       }
@@ -459,7 +460,7 @@ ${userPrompt}`;
         threat_detected: aiResult.threatDetected,
         risk_level: aiResult.riskLevel,
         threat_count: aiResult.threatDetected ? 1 : 0,
-        patterns_count: aiResult.patterns?.length || 0,
+        alerts_count: aiResult.alerts?.length || 0,
       };
 
       await supabase
@@ -478,7 +479,7 @@ ${userPrompt}`;
         threatDetected: aiResult.threatDetected,
         riskLevel: aiResult.riskLevel,
         findingsCount: aiResult.threatDetected ? 1 : 0,
-        patternsCount: aiResult.patterns?.length || 0,
+        alertsCount: aiResult.alerts?.length || 0,
       });
 
       if (aiResult.threatDetected) {
@@ -640,17 +641,33 @@ ${userPrompt}`;
                   <div className="glass-card p-3 rounded-lg space-y-2 text-sm">
                     <div className="flex gap-4 text-muted-foreground">
                       <span>📊 הודעות: {lovableResult.messages_analyzed}</span>
-                      <span>🖼️ תמונות: {lovableResult.media_summary?.images || 0}</span>
-                      <span>🎤 אודיו: {lovableResult.media_summary?.audio || 0}</span>
-                      <span>🎬 וידאו: {lovableResult.media_summary?.video || 0}</span>
+                      <span>🖼️ תמונות: {lovableResult.images_analyzed || 0}</span>
                     </div>
+                    {lovableResult.threatDetected && (
+                      <div className="flex items-center gap-2">
+                        <Badge variant={
+                          lovableResult.riskLevel === 'critical' ? 'riskCritical' :
+                          lovableResult.riskLevel === 'high' ? 'riskHigh' :
+                          lovableResult.riskLevel === 'medium' ? 'riskMedium' : 'riskLow'
+                        }>
+                          רמת סיכון: {lovableResult.riskLevel}
+                        </Badge>
+                        <span className="text-warning">⚠️ {lovableResult.alerts?.length || 0} התראות</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2">
                     <Label className="font-bold">תשובת ה-AI:</Label>
                     <ScrollArea className="h-[300px] border rounded-lg p-3 bg-muted/30">
                       <pre className="text-xs whitespace-pre-wrap font-mono text-foreground" dir="rtl">
-                        {JSON.stringify(lovableResult.result, null, 2)}
+                        {JSON.stringify({
+                          threatDetected: lovableResult.threatDetected,
+                          riskLevel: lovableResult.riskLevel,
+                          threatTypes: lovableResult.threatTypes,
+                          alerts: lovableResult.alerts,
+                          explanation: lovableResult.explanation,
+                        }, null, 2)}
                       </pre>
                     </ScrollArea>
                   </div>
@@ -663,7 +680,7 @@ ${userPrompt}`;
                 </Button>
                 <Button onClick={startScan} variant="glow" size="lg" className="flex-1">
                   <Zap className="w-5 h-5" />
-                  התחל סריקה (OpenAI)
+                  התחל סריקה (Gemini 3 Pro)
                 </Button>
               </div>
             </div>
@@ -704,8 +721,8 @@ ${userPrompt}`;
                       <p className="text-sm text-muted-foreground">ממצאים</p>
                     </div>
                     <div className="glass-card p-4 rounded-xl">
-                      <span className="text-2xl font-bold text-primary">{result.patternsCount}</span>
-                      <p className="text-sm text-muted-foreground">דפוסים</p>
+                      <span className="text-2xl font-bold text-primary">{result.alertsCount}</span>
+                      <p className="text-sm text-muted-foreground">התראות</p>
                     </div>
                   </div>
                 </>
