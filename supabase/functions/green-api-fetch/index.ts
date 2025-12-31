@@ -8,6 +8,7 @@ const corsHeaders = {
 
 interface FetchRequest {
   child_id: string;
+  max_chats?: number; // Optional: limit chats to process
 }
 
 interface GreenAPIChat {
@@ -28,7 +29,6 @@ interface GreenAPIMessage {
   textMessage?: string;
   caption?: string;
   fromMe?: boolean;
-  // Media fields
   downloadUrl?: string;
   jpegThumbnail?: string;
   fileName?: string;
@@ -99,7 +99,6 @@ async function getGreenApiCredentials(
   supabase: any,
   childId: string
 ): Promise<{ instanceId: string; apiToken: string } | null> {
-  // First try to get per-child credentials
   const { data: cred } = await supabase
     .from("connector_credentials")
     .select("instance_id, api_token")
@@ -133,14 +132,12 @@ async function fetchWithRetry(
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      // Add delay before each attempt (except first)
       if (attempt > 0) {
-        const waitTime = Math.min(Math.pow(2, attempt) * 2000, 10000); // 2s, 4s, 8s max
+        const waitTime = Math.min(Math.pow(2, attempt) * 2000, 10000);
         console.log(`Waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
       
-      // Create abort controller for timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       
@@ -151,15 +148,13 @@ async function fetchWithRetry(
       
       clearTimeout(timeoutId);
       
-      // If rate limited, wait longer and retry
       if (response.status === 429) {
         const waitTime = Math.min(Math.pow(2, attempt + 1) * 3000, 15000);
-        console.log(`Rate limited (429), waiting ${waitTime}ms before retry ${attempt + 1}/${maxRetries}`);
+        console.log(`Rate limited (429), waiting ${waitTime}ms before retry`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
       }
       
-      // If gateway timeout (504), retry
       if (response.status === 504) {
         console.log(`Gateway timeout (504), retrying ${attempt + 1}/${maxRetries}`);
         continue;
@@ -182,23 +177,119 @@ async function fetchWithRetry(
 // Check if chat ID is valid (skip system/invalid chats)
 function isValidChatId(chatId: string): boolean {
   if (!chatId) return false;
-  // Skip invalid chat IDs like "0@c.us"
   if (chatId === "0@c.us" || chatId.startsWith("0@")) return false;
-  // Skip status broadcasts
   if (chatId === "status@broadcast") return false;
   return true;
 }
 
-serve(async (req) => {
-  console.log("=== green-api-fetch v6: with rate limiting protection ===");
+// Sort and prioritize chats: private chats first, then by recent activity
+function prioritizeChats(chats: GreenAPIChat[]): GreenAPIChat[] {
+  const validChats = chats.filter(chat => isValidChatId(chat.id));
   
-  // Handle CORS preflight requests
+  // Separate private chats and groups
+  const privateChats = validChats.filter(c => c.id.endsWith('@c.us'));
+  const groupChats = validChats.filter(c => c.id.endsWith('@g.us'));
+  
+  // Sort each by lastMessageTime (most recent first)
+  const sortByTime = (a: GreenAPIChat, b: GreenAPIChat) => 
+    (b.lastMessageTime || 0) - (a.lastMessageTime || 0);
+  
+  privateChats.sort(sortByTime);
+  groupChats.sort(sortByTime);
+  
+  // Interleave: take from private and group alternately, prioritizing private
+  const result: GreenAPIChat[] = [];
+  let pIdx = 0, gIdx = 0;
+  
+  while (pIdx < privateChats.length || gIdx < groupChats.length) {
+    // Take 2 private chats for every 1 group chat (prioritize private)
+    if (pIdx < privateChats.length) result.push(privateChats[pIdx++]);
+    if (pIdx < privateChats.length) result.push(privateChats[pIdx++]);
+    if (gIdx < groupChats.length) result.push(groupChats[gIdx++]);
+  }
+  
+  return result;
+}
+
+// Find or create chat by external_chat_id
+async function findOrCreateChat(
+  supabase: any,
+  childId: string,
+  externalChatId: string,
+  chatName: string,
+  isGroup: boolean,
+  lastMessageTime: number | null
+): Promise<{ id: string } | null> {
+  // First try to find by external_chat_id
+  let { data: dbChat } = await supabase
+    .from("chats")
+    .select("id, chat_name")
+    .eq("child_id", childId)
+    .eq("external_chat_id", externalChatId)
+    .maybeSingle();
+
+  if (dbChat) {
+    // Update chat_name if it changed
+    if (dbChat.chat_name !== chatName) {
+      await supabase
+        .from("chats")
+        .update({ chat_name: chatName })
+        .eq("id", dbChat.id);
+    }
+    return dbChat;
+  }
+
+  // Fallback: check if chat exists by chat_name (for backward compatibility)
+  const { data: legacyChat } = await supabase
+    .from("chats")
+    .select("id")
+    .eq("child_id", childId)
+    .eq("chat_name", chatName)
+    .is("external_chat_id", null)
+    .maybeSingle();
+
+  if (legacyChat) {
+    // Update with external_chat_id
+    await supabase
+      .from("chats")
+      .update({ external_chat_id: externalChatId })
+      .eq("id", legacyChat.id);
+    return legacyChat;
+  }
+
+  // Create new chat
+  const { data: newChat, error: chatError } = await supabase
+    .from("chats")
+    .insert({
+      child_id: childId,
+      chat_name: chatName,
+      external_chat_id: externalChatId,
+      participant_count: 2,
+      is_group: isGroup,
+      last_message_at: lastMessageTime 
+        ? new Date(lastMessageTime * 1000).toISOString() 
+        : null,
+    })
+    .select("id")
+    .single();
+
+  if (chatError) {
+    console.error("Error creating chat:", chatError);
+    return null;
+  }
+  
+  return newChat;
+}
+
+serve(async (req) => {
+  console.log("=== green-api-fetch v7: scalable smart sync ===");
+  
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 40000; // 40 seconds max to leave more buffer
+  const MAX_EXECUTION_TIME = 45000; // 45 seconds max
   
   const shouldContinue = () => {
     const elapsed = Date.now() - startTime;
@@ -210,22 +301,19 @@ serve(async (req) => {
   };
 
   try {
-    const { child_id }: FetchRequest = await req.json();
+    const { child_id, max_chats }: FetchRequest = await req.json();
     console.log("Starting sync for child:", child_id);
 
-    // Verify authentication and child ownership
     const authResult = await verifyAuthAndOwnership(req, child_id);
     if (authResult instanceof Response) {
       return authResult;
     }
 
-    // Create service role client for database operations
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Get Green API credentials for this child
     const credentials = await getGreenApiCredentials(supabase, child_id);
     
     if (!credentials) {
@@ -240,9 +328,7 @@ serve(async (req) => {
     const baseUrl = `https://api.green-api.com/waInstance${instanceId}`;
     console.log("Using Green API instance:", instanceId);
 
-    console.log("Fetching chats for child:", child_id, "instance:", instanceId);
-
-    // Fetch recent chats with retry logic
+    // Fetch all chats
     const chatsResponse = await fetchWithRetry(`${baseUrl}/getChats/${apiToken}`, {
       method: "GET",
     });
@@ -253,162 +339,82 @@ serve(async (req) => {
       throw new Error(`Green API error: ${chatsResponse.status}`);
     }
 
-    const chats: GreenAPIChat[] = await chatsResponse.json();
+    const allChats: GreenAPIChat[] = await chatsResponse.json();
+    console.log(`Fetched ${allChats.length} total chats from Green API`);
+
+    // Prioritize and limit chats
+    const prioritizedChats = prioritizeChats(allChats);
+    const MAX_CHATS = max_chats || 15; // Process up to 15 chats by default
+    const chatsToProcess = prioritizedChats.slice(0, MAX_CHATS);
+    
+    console.log(`Processing ${chatsToProcess.length} chats (${prioritizedChats.filter(c => c.id.endsWith('@c.us')).length} private, ${prioritizedChats.filter(c => c.id.endsWith('@g.us')).length} groups)`);
 
     let totalMessagesImported = 0;
     let totalChatsProcessed = 0;
+    const BATCH_SIZE = 5; // Process in batches
+    const BATCH_DELAY = 3000; // 3 seconds between batches
 
-    // Filter valid chats and limit to 3
-    const validChats = chats.filter(chat => isValidChatId(chat.id)).slice(0, 3);
-    console.log(`Processing ${validChats.length} valid chats out of ${chats.length} total`);
-    
-    for (const chat of validChats) {
-      try {
-        const chatName = sanitizeText(chat.name || chat.id);
+    for (let batchStart = 0; batchStart < chatsToProcess.length; batchStart += BATCH_SIZE) {
+      if (!shouldContinue()) {
+        console.log("Stopping due to timeout protection");
+        break;
+      }
 
-        // Find or create chat in database
-        let { data: dbChat } = await supabase
-          .from("chats")
-          .select("id")
-          .eq("child_id", child_id)
-          .eq("chat_name", chatName)
-          .maybeSingle();
+      const batch = chatsToProcess.slice(batchStart, batchStart + BATCH_SIZE);
+      console.log(`Processing batch ${Math.floor(batchStart / BATCH_SIZE) + 1}: ${batch.length} chats`);
 
-        if (!dbChat) {
-          const { data: newChat, error: chatError } = await supabase
-            .from("chats")
-            .insert({
-              child_id,
-              chat_name: chatName,
-              participant_count: 2,
-              is_group: chat.type === "group",
-              last_message_at: chat.lastMessageTime 
-                ? new Date(chat.lastMessageTime * 1000).toISOString() 
-                : null,
-            })
-            .select("id")
-            .single();
+      for (const chat of batch) {
+        if (!shouldContinue()) break;
 
-          if (chatError) {
-            console.error("Error creating chat:", chatError);
-            continue;
-          }
-          dbChat = newChat;
-        }
+        try {
+          const chatName = sanitizeText(chat.name || chat.id);
+          const externalChatId = chat.id; // Green API chat ID
+          const isGroup = chat.type === "group" || chat.id.endsWith('@g.us');
 
-        // Add longer delay between chats to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Fetch messages for this chat with retry
-        const messagesResponse = await fetchWithRetry(`${baseUrl}/getChatHistory/${apiToken}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chatId: chat.id, count: 30 }), // Reduced from 50
-        });
-
-        if (!messagesResponse.ok) {
-          console.error(`Failed to fetch messages for chat ${chat.id}`);
-          continue;
-        }
-
-        const messages: GreenAPIMessage[] = await messagesResponse.json();
-        console.log(`Processing ${messages.length} messages for chat ${chat.id}`);
-        
-        // Check timeout before processing messages
-        if (!shouldContinue()) {
-          console.log("Stopping due to timeout protection");
-          break;
-        }
-
-        // OPTIMIZATION: Batch check existing messages to reduce DB queries
-        const timestamps = messages.map(m => new Date(m.timestamp * 1000).toISOString());
-        const { data: existingMessages } = await supabase
-          .from("messages")
-          .select("id, media_url, message_timestamp")
-          .eq("chat_id", dbChat.id)
-          .in("message_timestamp", timestamps);
-
-        const existingMap = new Map(
-          (existingMessages || []).map(m => [m.message_timestamp, m])
-        );
-
-        // Collect messages to insert in batch
-        const messagesToInsert: any[] = [];
-        
-        // Limit media fetches even more aggressively
-        let mediaFetchCount = 0;
-        const MAX_MEDIA_FETCHES = 3; // Very limited to prevent timeout
-
-        for (const msg of messages) {
-          const messageTimestamp = new Date(msg.timestamp * 1000).toISOString();
-          const existingMsg = existingMap.get(messageTimestamp);
-
-          // Skip if message exists (no media URL updates to save time)
-          if (existingMsg) {
-            continue;
-          }
-
-          // Detect message type
-          const msgTypeDetect = msg.typeMessage || msg.type;
-          const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(msgTypeDetect);
-
-          // SKIP media URL fetching for messages that already have it or if we've hit limit
-          if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_FETCHES && msg.idMessage && shouldContinue()) {
-            try {
-              const chatIdForDownload = msg.chatId || chat.id;
-              const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chatId: chatIdForDownload, idMessage: msg.idMessage }),
-              });
-              
-              if (downloadResponse.ok) {
-                const downloadData = await downloadResponse.json();
-                if (downloadData.downloadUrl) {
-                  msg.downloadUrl = downloadData.downloadUrl;
-                }
-              }
-              mediaFetchCount++;
-            } catch (e) {
-              // Ignore media fetch errors
-            }
-          }
-
-          let msgType = "text";
-          if (msgTypeDetect === "imageMessage") msgType = "image";
-          else if (msgTypeDetect === "audioMessage" || msgTypeDetect === "pttMessage") msgType = "audio";
-          else if (msgTypeDetect === "videoMessage") msgType = "video";
-          else if (msgTypeDetect === "documentMessage") msgType = "file";
-          else if (msgTypeDetect === "stickerMessage") msgType = "sticker";
-
-          const textContent = sanitizeText(msg.textMessage || msg.caption || "");
-          const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
-          const senderLabel = isOutgoing ? "אני" : sanitizeText(msg.senderName || msg.senderId);
-
-          messagesToInsert.push({
+          // Find or create chat by external_chat_id
+          const dbChat = await findOrCreateChat(
+            supabase,
             child_id,
-            chat_id: dbChat.id,
-            sender_label: senderLabel,
-            is_child_sender: isOutgoing,
-            msg_type: msgType,
-            message_timestamp: messageTimestamp,
-            text_content: textContent,
-            text_excerpt: textContent.substring(0, 100),
-            media_url: msg.downloadUrl || null,
-            media_thumbnail_url: msg.jpegThumbnail || null,
-            external_message_id: msg.idMessage || null,
-          });
-        }
+            externalChatId,
+            chatName,
+            isGroup,
+            chat.lastMessageTime
+          );
 
-        // Filter out messages that already exist by external_message_id
-        if (messagesToInsert.length > 0) {
-          // Get list of external_message_ids we're about to insert
-          const externalIds = messagesToInsert
-            .map(m => m.external_message_id)
+          if (!dbChat) {
+            console.error("Failed to find/create chat for:", chat.id);
+            continue;
+          }
+
+          // Small delay between individual chats
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          
+          // Fetch messages with increased count for active chats
+          const messagesResponse = await fetchWithRetry(`${baseUrl}/getChatHistory/${apiToken}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chatId: chat.id, count: 50 }), // Increased from 30
+          });
+
+          if (!messagesResponse.ok) {
+            console.error(`Failed to fetch messages for chat ${chat.id}`);
+            continue;
+          }
+
+          const messages: GreenAPIMessage[] = await messagesResponse.json();
+          console.log(`Fetched ${messages.length} messages for ${chatName}`);
+          
+          if (messages.length === 0) {
+            totalChatsProcessed++;
+            continue;
+          }
+
+          // Batch check existing messages by external_message_id
+          const externalIds = messages
+            .map(m => m.idMessage)
             .filter(Boolean);
           
-          // Check which ones already exist
-          let existingIds: Set<string> = new Set();
+          let existingIds = new Set<string>();
           if (externalIds.length > 0) {
             const { data: existingMessages } = await supabase
               .from("messages")
@@ -417,61 +423,125 @@ serve(async (req) => {
             
             existingIds = new Set(
               (existingMessages || [])
-                .map(m => m.external_message_id)
+                .map((m: any) => m.external_message_id)
                 .filter(Boolean)
             );
           }
-          
-          // Filter out duplicates
-          const newMessages = messagesToInsert.filter(m => {
-            if (m.external_message_id && existingIds.has(m.external_message_id)) {
-              return false; // Skip - already exists
+
+          // Prepare new messages
+          const messagesToInsert: any[] = [];
+          let mediaFetchCount = 0;
+          const MAX_MEDIA_FETCHES = 5;
+
+          for (const msg of messages) {
+            // Skip if already exists
+            if (msg.idMessage && existingIds.has(msg.idMessage)) {
+              continue;
             }
-            return true;
-          });
-          
-          if (newMessages.length > 0) {
-            console.log(`Inserting ${newMessages.length} new messages (filtered from ${messagesToInsert.length})`);
+
+            const msgTypeDetect = msg.typeMessage || msg.type;
+            const isMediaMessage = ["imageMessage", "audioMessage", "pttMessage", "videoMessage", "documentMessage", "stickerMessage"].includes(msgTypeDetect);
+
+            // Fetch media URL if needed
+            if (isMediaMessage && !msg.downloadUrl && mediaFetchCount < MAX_MEDIA_FETCHES && msg.idMessage && shouldContinue()) {
+              try {
+                const chatIdForDownload = msg.chatId || chat.id;
+                const downloadResponse = await fetch(`${baseUrl}/downloadFile/${apiToken}`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ chatId: chatIdForDownload, idMessage: msg.idMessage }),
+                });
+                
+                if (downloadResponse.ok) {
+                  const downloadData = await downloadResponse.json();
+                  if (downloadData.downloadUrl) {
+                    msg.downloadUrl = downloadData.downloadUrl;
+                  }
+                }
+                mediaFetchCount++;
+              } catch (e) {
+                // Ignore media fetch errors
+              }
+            }
+
+            let msgType = "text";
+            if (msgTypeDetect === "imageMessage") msgType = "image";
+            else if (msgTypeDetect === "audioMessage" || msgTypeDetect === "pttMessage") msgType = "audio";
+            else if (msgTypeDetect === "videoMessage") msgType = "video";
+            else if (msgTypeDetect === "documentMessage") msgType = "file";
+            else if (msgTypeDetect === "stickerMessage") msgType = "sticker";
+
+            const textContent = sanitizeText(msg.textMessage || msg.caption || "");
+            const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
+            const senderLabel = isOutgoing ? "אני" : sanitizeText(msg.senderName || msg.senderId);
+
+            messagesToInsert.push({
+              child_id,
+              chat_id: dbChat.id,
+              sender_label: senderLabel,
+              is_child_sender: isOutgoing,
+              msg_type: msgType,
+              message_timestamp: new Date(msg.timestamp * 1000).toISOString(),
+              text_content: textContent,
+              text_excerpt: textContent.substring(0, 100),
+              media_url: msg.downloadUrl || null,
+              media_thumbnail_url: msg.jpegThumbnail || null,
+              external_message_id: msg.idMessage || null,
+            });
+          }
+
+          // Insert new messages
+          if (messagesToInsert.length > 0) {
+            console.log(`Inserting ${messagesToInsert.length} new messages for ${chatName}`);
             
             const { error: insertError } = await supabase
               .from("messages")
-              .insert(newMessages);
+              .insert(messagesToInsert);
             
             if (insertError) {
-              // If it's a duplicate error, that's fine - another process beat us
               if (insertError.message?.includes('duplicate') || insertError.code === '23505') {
                 console.log("Some duplicates detected, continuing...");
-                totalMessagesImported += newMessages.length;
               } else {
                 console.error("Batch insert error:", insertError.message);
               }
-            } else {
-              totalMessagesImported += newMessages.length;
             }
-          } else {
-            console.log("No new messages to insert (all duplicates)");
+            totalMessagesImported += messagesToInsert.length;
           }
-        }
 
-        totalChatsProcessed++;
-        
-        // Check timeout after each chat
-        if (!shouldContinue()) {
-          console.log("Stopping chat loop due to timeout protection");
-          break;
+          // Update chat's last_message_at
+          if (messages.length > 0) {
+            const latestTimestamp = Math.max(...messages.map(m => m.timestamp || 0));
+            if (latestTimestamp > 0) {
+              await supabase
+                .from("chats")
+                .update({ last_message_at: new Date(latestTimestamp * 1000).toISOString() })
+                .eq("id", dbChat.id);
+            }
+          }
+
+          totalChatsProcessed++;
+        } catch (chatError) {
+          console.error(`Error processing chat ${chat.id}:`, chatError);
         }
-      } catch (chatError) {
-        console.error(`Error processing chat ${chat.id}:`, chatError);
+      }
+
+      // Delay between batches to avoid rate limiting
+      if (batchStart + BATCH_SIZE < chatsToProcess.length && shouldContinue()) {
+        console.log(`Waiting ${BATCH_DELAY}ms before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
       }
     }
 
-    console.log("Sync complete:", totalChatsProcessed, "chats,", totalMessagesImported, "messages");
+    const elapsedTime = Date.now() - startTime;
+    console.log(`Sync complete in ${elapsedTime}ms: ${totalChatsProcessed} chats, ${totalMessagesImported} messages`);
 
     return new Response(
       JSON.stringify({
         success: true,
         chatsProcessed: totalChatsProcessed,
         messagesImported: totalMessagesImported,
+        totalChatsAvailable: allChats.length,
+        elapsedMs: elapsedTime,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
