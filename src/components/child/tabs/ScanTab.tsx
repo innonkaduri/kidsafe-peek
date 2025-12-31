@@ -247,12 +247,29 @@ ${msgs.length > 20 ? `\n... ועוד ${msgs.length - 20} הודעות` : ''}
         throw error;
       }
 
+      // Check if response contains a payment/rate limit error
+      if (data?.status === 402 || data?.error?.includes('Payment required')) {
+        toast.error('נגמרו הקרדיטים - יש להוסיף קרדיטים בהגדרות Workspace');
+        return;
+      }
+      if (data?.status === 429 || data?.error?.includes('Rate limit')) {
+        toast.error('הגעת למגבלת הבקשות - נסה שוב בעוד דקה');
+        return;
+      }
+
       console.log('[ScanTab] Lovable AI result:', data);
       setLovableResult(data);
       toast.success('הבדיקה עם Lovable AI הושלמה');
     } catch (error: any) {
       console.error('[ScanTab] Lovable AI test failed:', error);
-      toast.error('שגיאה בבדיקה עם Lovable AI: ' + error.message);
+      const errMsg = error.message || '';
+      if (errMsg.includes('402') || errMsg.includes('Payment')) {
+        toast.error('נגמרו הקרדיטים - יש להוסיף קרדיטים בהגדרות Workspace');
+      } else if (errMsg.includes('429') || errMsg.includes('rate')) {
+        toast.error('הגעת למגבלת הבקשות - נסה שוב בעוד דקה');
+      } else {
+        toast.error('שגיאה בבדיקה עם Lovable AI: ' + error.message);
+      }
     } finally {
       setTestingLovable(false);
     }
