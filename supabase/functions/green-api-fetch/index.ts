@@ -404,6 +404,11 @@ serve(async (req) => {
           const messages: GreenAPIMessage[] = await messagesResponse.json();
           console.log(`Fetched ${messages.length} messages for ${chatName}`);
           
+          // Log first message structure for debugging
+          if (messages.length > 0) {
+            console.log(`Sample message structure:`, JSON.stringify(messages[0], null, 2));
+          }
+          
           if (messages.length === 0) {
             totalChatsProcessed++;
             continue;
@@ -472,7 +477,19 @@ serve(async (req) => {
             else if (msgTypeDetect === "stickerMessage") msgType = "sticker";
 
             const textContent = sanitizeText(msg.textMessage || msg.caption || "");
-            const isOutgoing = msg.fromMe === true || msg.type === "outgoing";
+            
+            // Enhanced outgoing message detection:
+            // 1. fromMe is true (direct indicator)
+            // 2. type is "outgoing" (case-insensitive)
+            // 3. In private chats: no senderName means it's from the phone owner
+            const msgTypeLower = (msg.type || "").toLowerCase();
+            const isOutgoing = msg.fromMe === true || 
+                               msgTypeLower === "outgoing" || 
+                               (!isGroup && !msg.senderName && msg.senderId?.endsWith('@c.us'));
+            
+            // Log for debugging
+            console.log(`Message: type="${msg.type}", fromMe=${msg.fromMe}, sender="${msg.senderName || msg.senderId}", isOutgoing=${isOutgoing}`);
+            
             const senderLabel = isOutgoing ? "אני" : sanitizeText(msg.senderName || msg.senderId);
 
             messagesToInsert.push({
